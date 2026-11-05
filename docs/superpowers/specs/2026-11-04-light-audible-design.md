@@ -64,9 +64,9 @@ Each component is a module with one job and a narrow interface.
 |---|---|---|
 | `audible_client` | The only code that imports `audible`. Covers external-login URL generation, finishing login and registering the device, refreshing tokens, fetching library and chapters, requesting the AAXC license (URL + key/iv), and getting/setting last position heard. Exposed as an `AudibleClient` protocol; tests use a fake. | `audible` library |
 | `secrets` | Encrypts and decrypts the Audible auth blob with Fernet using `AUTH_ENCRYPTION_KEY`. | `cryptography` |
-| `setup_web` | Password-protected HTML pages for sign-in, pairing code, position-sync toggle, and status. | `audible_client`, `pairing`, `account` |
+| `setup_web` | HTML pages behind an HTTP Basic auth prompt (password = `SETUP_PASSWORD`) for sign-in, pairing code, position-sync toggle, and status. | `audible_client`, `pairing`, `account` |
 | `pairing` | Issues 6-digit codes, exchanges a code for a device token, verifies tokens, and revokes old tokens. | DB |
-| `library` | Syncs owned books and chapters from Audible into the DB and serves the list with an ETag. | `audible_client`, DB |
+| `library` | Syncs owned books from Audible into the DB and serves the list with an ETag. Chapters are fetched per book the first time that book is opened, then stored. | `audible_client`, DB |
 | `converter` | Background worker: license → download AAXC to temp dir → `ffmpeg` decrypt/remux → upload to bucket. | `audible_client`, `storage`, DB |
 | `storage` | S3 upload, presigned GET URLs, delete, and evicting least-recently-played books. | `boto3` |
 | `positions` | Reads and writes positions, resolves conflicts, and switches to Light-only mode when Audible fails. | `audible_client`, DB |
@@ -74,8 +74,8 @@ Each component is a module with one job and a narrow interface.
 
 ### 2.3 Data model (Postgres)
 
-- `account` (single row): `encrypted_auth`, `locale`, `status` (`signed_out` \| `ok` \| `needs_sign_in`), `position_sync_enabled` (bool, default true), `consecutive_sync_failures`, `library_synced_at`.
-- `books`: `asin` PK, `title`, `authors`, `narrators`, `runtime_ms`, `purchase_date`, `playable` (bool), `unplayable_reason`.
+- `account` (single row): `encrypted_auth`, `locale`, `status` (`signed_out` \| `ok` \| `needs_sign_in`), `position_sync_enabled` (bool, default true), `consecutive_sync_failures`, `library_synced_at`, `pending_login` (sign-in started but not finished).
+- `books`: `asin` PK, `title`, `authors`, `narrators`, `runtime_ms`, `purchase_date`, `playable` (bool), `unplayable_reason`, `acr` (Audible content reference, needed for position writes; stored on first conversion), `chapters_fetched` (bool).
 - `chapters`: (`asin`, `idx`) PK, `title`, `start_ms`, `length_ms`.
 - `conversions`: `asin` PK, `status` (`preparing` \| `ready` \| `failed`; no row means not ready), `attempts`, `error`, `object_key`, `size_bytes`, `started_at`, `finished_at`, `last_played_at`.
 - `positions`: `asin` PK, `position_ms`, `updated_at`.
@@ -99,7 +99,7 @@ All `/api/*` routes except `/api/pair` require `Authorization: Bearer <token>`. 
 
 `BookState` = `{status: "not_ready"|"preparing"|"ready"|"failed"|"unplayable", url?, url_expires_at?, chapters?, error?}`. `url` is a presigned bucket URL valid for 6 hours. Returning a URL updates `last_played_at`.
 
-Setup routes (`/setup/*`) use the password session: start login, finish login (pasted redirect URL), create pairing code, toggle position sync, and view status.
+Setup routes (`/setup/*`) use HTTP Basic auth: start login, finish login (pasted redirect URL), create pairing code, toggle position sync, and view status.
 
 ### 2.5 Light tool
 
@@ -121,7 +121,7 @@ Setup routes (`/setup/*`) use the password session: start login, finish login (p
 
 ## 3. Data flow
 
-1. **Sign-in:** owner opens `/setup` → enters `SETUP_PASSWORD` → server builds an Amazon login URL via `audible` external login → owner signs in (captcha/2FA work normally) → pastes the final redirect URL → server registers the device, encrypts the auth blob, stores it in `account`, and triggers library sync.
+1. **Sign-in:** owner opens `/setup` → enters `SETUP_PASSWORD` at the browser's password prompt → server builds an Amazon login URL via `audible` external login → owner signs in (captcha/2FA work normally) → pastes the final redirect URL → server registers the device, encrypts the auth blob, stores it in `account`, and triggers library sync.
 2. **Pairing:** setup page shows a 6-digit code (10 min) → phone posts it to `/api/pair` → phone stores the token. Pairing again revokes previous tokens.
 3. **Library:** phone fetches `/api/library` on launch with its ETag, keeps a cached copy, and refreshes on pull-to-refresh or when the cache is older than 24h. Search runs on the cached list.
 4. **Play:** phone calls `prepare`.
@@ -164,7 +164,7 @@ Setup routes (`/setup/*`) use the password session: start login, finish login (p
 Development is test-first, one feature at a time, server before tool.
 
 **Server (`pytest`)**
-- `docker compose` provides Postgres and MinIO for tests. A `FakeAudibleClient` stands in for Audible.
+- Local Homebrew Postgres 16 and MinIO (started by `server/scripts/dev-services.sh`) provide the database and bucket for tests. Docker is not required locally; Railway builds the image. A `FakeAudibleClient` stands in for Audible.
 - API tests cover:
   - pairing (success, wrong code, lockout, expiry, re-pair revokes)
   - token enforcement
