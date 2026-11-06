@@ -46,7 +46,14 @@ def ffmpeg_args(src: Path, dest: Path, key: str, iv: str) -> list[str]:
     ]
 
 
-async def _run_ffmpeg(args: list[str]) -> None:
+def _redact(text: str, secrets: tuple[str, ...]) -> str:
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
+async def _run_ffmpeg(args: list[str], secrets: tuple[str, ...]) -> None:
     proc = await asyncio.create_subprocess_exec(
         *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
     )
@@ -57,7 +64,8 @@ async def _run_ffmpeg(args: list[str]) -> None:
         await proc.wait()
         raise
     if proc.returncode != 0:
-        tail = stderr.decode(errors="replace").strip()[-_ERROR_MAX_CHARS:]
+        # Redact before trimming so a secret straddling the cut can't leak partially.
+        tail = _redact(stderr.decode(errors="replace"), secrets).strip()[-_ERROR_MAX_CHARS:]
         raise ConversionError(tail or f"ffmpeg exited with {proc.returncode}")
 
 
@@ -75,7 +83,7 @@ async def convert_one(
                 book.acr = lic.acr
                 await db.commit()
             await session.download(lic.url, src)
-        await _run_ffmpeg(ffmpeg_args(src, dest, lic.key, lic.iv))
+        await _run_ffmpeg(ffmpeg_args(src, dest, lic.key, lic.iv), secrets=(lic.key, lic.iv))
         size = await asyncio.to_thread(storage.upload, dest, key)
 
     conv = await db.get(Conversion, asin)
@@ -87,6 +95,8 @@ async def convert_one(
     conv.size_bytes = size
     conv.error = None
     conv.finished_at = _utcnow()
+    # The user just asked to play it: don't make a fresh conversion the first eviction candidate.
+    conv.last_played_at = conv.finished_at
     await db.commit()
     await evict_if_needed(db, storage, settings.bucket_soft_limit_bytes, protect={asin})
 

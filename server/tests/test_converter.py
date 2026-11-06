@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from light_audible import account, converter
@@ -221,3 +222,48 @@ async def test_lifespan_recovers_stuck_and_runs_worker(db, settings):
         await asyncio.sleep(0.5)
     conv = await reload(db, Conversion, "OLD")
     assert (conv.status, conv.attempts, conv.started_at) == ("preparing", 0, None)
+
+
+async def test_fresh_conversions_not_first_evicted(db, settings, fake, factory, storage, signed_in, tmp_path):
+    old = tmp_path / "old.m4b"
+    old.write_bytes(b"x" * 10_000)
+    storage.upload(old, "books/OLD.m4b")
+    await seed(db, "OLD", status="ready", object_key="books/OLD.m4b", size_bytes=10_000,
+               last_played_at=NOW - timedelta(days=10))
+    fake.licenses["B2"] = fake.licenses["B1"]
+    await seed(db, "B1", status="preparing", started_at=NOW)
+    await seed(db, "B2", status="preparing", started_at=NOW)
+
+    await converter.convert_one(db, settings, factory, storage, "B1")
+    a = await reload(db, Conversion, "B1")
+    assert a.last_played_at == a.finished_at
+    settings.bucket_soft_limit_bytes = 2 * a.size_bytes + 5_000  # forces exactly one eviction
+    await converter.convert_one(db, settings, factory, storage, "B2")
+
+    db.expire_all()
+    remaining = {c.asin for c in (await db.execute(select(Conversion))).scalars()}
+    assert remaining == {"B1", "B2"}
+
+
+async def test_ffmpeg_error_redacts_key_and_iv(db, worker, signed_in, monkeypatch):
+    def leaky(src, dest, key, iv):
+        return ["sh", "-c", f"echo 'bad key {key} and iv {iv}' >&2; printf '%2000s' | tr ' ' x >&2; exit 1"]
+
+    monkeypatch.setattr(converter, "ffmpeg_args", leaky)
+    await seed(db, status="preparing")
+    assert await worker.run_once() is True
+    conv = await reload(db, Conversion, "B1")
+    assert conv.status == "failed"
+    assert KEY not in conv.error and IV not in conv.error
+    assert len(conv.error) <= 500
+
+
+async def test_ffmpeg_error_redacted_short_output(db, worker, signed_in, monkeypatch):
+    monkeypatch.setattr(
+        converter, "ffmpeg_args",
+        lambda src, dest, key, iv: ["sh", "-c", f"echo 'bad key {key} iv {iv}' >&2; exit 1"],
+    )
+    await seed(db, status="preparing")
+    await worker.run_once()
+    conv = await reload(db, Conversion, "B1")
+    assert conv.error == "bad key *** iv ***"
