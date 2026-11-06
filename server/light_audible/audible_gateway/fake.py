@@ -31,11 +31,13 @@ class FakeAudibleSession:
         self.download_source = download_source
         self.auth = auth if auth is not None else {}
         self.set_position_calls: list[tuple[str, str, int]] = []
+        self.fetch_chapters_calls: list[str] = []
 
     async def fetch_library(self) -> list[LibraryItem]:
         return list(self.library)
 
     async def fetch_chapters(self, asin: str) -> list[Chapter]:
+        self.fetch_chapters_calls.append(asin)
         return list(self.chapters.get(asin, []))
 
     async def request_license(self, asin: str) -> License:
