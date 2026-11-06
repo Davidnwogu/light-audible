@@ -6,6 +6,10 @@
   <li>Library: {{ library_count }} books</li>
   <li>Position sync: {{ "on" if position_sync_enabled else "off" }}</li>
 </ul>
+{% if position_sync_auto_disabled %}<p class="note">Audible position sync turned off after repeated failures.</p>{% endif %}
+<form method="post" action="/setup/position-sync">
+  <button type="submit">{{ "Turn position sync off" if position_sync_enabled else "Turn position sync on" }}</button>
+</form>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 {% if note %}<p class="note">{{ note }}</p>{% endif %}

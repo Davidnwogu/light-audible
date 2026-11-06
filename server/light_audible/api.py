@@ -3,12 +3,12 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from light_audible import account, converter, library, pairing
+from light_audible import account, converter, library, pairing, positions
 from light_audible.config import Settings
 from light_audible.db import get_session
 from light_audible.models import Book, Conversion, Device
@@ -181,3 +181,44 @@ async def prepare_book(
 
     await db.commit()
     return _book_state(book, conv)
+
+
+class PositionBody(BaseModel):
+    position_ms: int = Field(ge=0)
+    client_updated_at: AwareDatetime
+
+
+@router.get("/books/{asin}/position")
+async def get_position(
+    asin: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    _device: Device = Depends(pairing.require_device),
+):
+    if await db.get(Book, asin) is None:
+        return _not_found()
+    position_ms, updated_at = await positions.resolve(
+        db, request.app.state.settings, request.app.state.audible_factory, asin
+    )
+    return {"position_ms": position_ms, "updated_at": updated_at.isoformat()}
+
+
+@router.put("/books/{asin}/position", status_code=204)
+async def put_position(
+    asin: str,
+    body: PositionBody,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    _device: Device = Depends(pairing.require_device),
+):
+    if await db.get(Book, asin) is None:
+        return _not_found()
+    await positions.save(
+        db,
+        request.app.state.settings,
+        request.app.state.audible_factory,
+        asin,
+        body.position_ms,
+        body.client_updated_at,
+    )
+    return Response(status_code=204)

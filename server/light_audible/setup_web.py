@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from light_audible import account, pairing
+from light_audible import account, pairing, positions
 from light_audible.audible_gateway import PendingLogin
 from light_audible.db import get_session
 from light_audible.models import Book
@@ -52,6 +52,10 @@ async def _render(
             "status": acct.status,
             "library_count": count,
             "position_sync_enabled": acct.position_sync_enabled,
+            "position_sync_auto_disabled": (
+                not acct.position_sync_enabled
+                and acct.consecutive_sync_failures >= positions.MAX_CONSECUTIVE_FAILURES
+            ),
             "login_url": login_url,
             "error": error,
             "note": note,
@@ -110,3 +114,12 @@ async def pairing_code(request: Request, db: AsyncSession = Depends(get_session)
     clock = pairing.get_clock(request)
     code = await pairing.create_code(db, now=clock())
     return await _render(request, db, pairing_code=code)
+
+
+@router.post("/position-sync", response_class=HTMLResponse)
+async def toggle_position_sync(request: Request, db: AsyncSession = Depends(get_session)):
+    acct = await account.get_account(db, request.app.state.settings)
+    acct.position_sync_enabled = not acct.position_sync_enabled
+    acct.consecutive_sync_failures = 0
+    await db.commit()
+    return await _render(request, db)
