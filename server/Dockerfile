@@ -24,4 +24,4 @@ COPY --chown=app:app migrations ./migrations
 COPY --chown=app:app light_audible ./light_audible
 RUN uv sync --frozen --no-dev
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn --factory light_audible.main:create_app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn --factory light_audible.main:create_app --host 0.0.0.0 --port ${PORT:-8000}"]

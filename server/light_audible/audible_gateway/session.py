@@ -118,8 +118,11 @@ class RealAudibleSession:
                     with open(dest, "wb") as f:
                         async for chunk in resp.aiter_bytes(1024 * 1024):
                             f.write(chunk)
-        except (httpx.TransportError, httpx.HTTPStatusError) as e:
-            raise TransientError(str(e) or type(e).__name__) from e
+        except httpx.HTTPStatusError as e:
+            # Never embed the (signed) CDN URL that httpx puts in str(e).
+            raise TransientError(f"download failed: HTTP {e.response.status_code}") from None
+        except httpx.TransportError as e:
+            raise TransientError(f"download failed: {type(e).__name__}") from None
 
     # verified against live account in Task 12
     async def get_position(self, asin: str) -> RemotePosition | None:

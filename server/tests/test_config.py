@@ -38,3 +38,10 @@ def test_rejects_short_or_empty_setup_password(password):
 def test_rejects_invalid_encryption_key(key):
     with pytest.raises(ValidationError):
         make(auth_encryption_key=key)
+
+
+def test_validation_errors_do_not_echo_secret_values():
+    with pytest.raises(ValidationError) as ei:
+        make(setup_password="short", auth_encryption_key="bad-key-secret-value")
+    text = str(ei.value)
+    assert "short'" not in text and "bad-key-secret-value" not in text

@@ -79,3 +79,18 @@ async def test_finish_login_registers_and_tags_locale(monkeypatch):
     assert out == {"adp_token": "t", "locale_code": "us"}
     assert seen["authorization_code"] == "CODE"
     assert seen["code_verifier"] == b"verif" and seen["domain"] == "com" and seen["serial"] == "S"
+
+
+async def test_download_error_does_not_leak_signed_url(monkeypatch, tmp_path):
+    url = "https://cdn.test/x?Signature=SECRETSIG"
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        session_mod.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(lambda r: httpx.Response(403)), **kw),
+    )
+    s = object.__new__(session_mod.RealAudibleSession)
+    with pytest.raises(TransientError) as ei:
+        await s.download(url, tmp_path / "x.m4b")
+    assert "SECRETSIG" not in str(ei.value) and "cdn.test" not in str(ei.value)
+    assert "403" in str(ei.value)
