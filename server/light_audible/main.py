@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from light_audible import setup_web
+from light_audible import api, pairing, setup_web
 from light_audible.audible_gateway import login as audible_login
 from light_audible.config import Settings, get_settings
 from light_audible.db import make_engine
@@ -32,8 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.after_login = _no_after_login
     app.include_router(setup_web.router)
 
-    @app.get("/api/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    app.add_exception_handler(pairing.UnauthorizedError, pairing.unauthorized_handler)
+    app.include_router(api.router)
 
     return app

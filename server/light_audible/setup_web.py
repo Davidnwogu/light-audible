@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from light_audible import account
+from light_audible import account, pairing
 from light_audible.audible_gateway import PendingLogin
 from light_audible.db import get_session
 from light_audible.models import Book
@@ -31,7 +31,12 @@ router = APIRouter(prefix="/setup", dependencies=[Depends(require_setup_password
 
 
 async def _render(
-    request: Request, db: AsyncSession, *, login_url: str | None = None, error: str | None = None
+    request: Request,
+    db: AsyncSession,
+    *,
+    login_url: str | None = None,
+    error: str | None = None,
+    pairing_code: str | None = None,
 ) -> HTMLResponse:
     acct = await account.get_account(db, request.app.state.settings)
     count = (await db.execute(select(func.count()).select_from(Book))).scalar_one()
@@ -46,6 +51,7 @@ async def _render(
             "position_sync_enabled": acct.position_sync_enabled,
             "login_url": login_url,
             "error": error,
+            "pairing_code": pairing_code,
         },
     )
 
@@ -83,3 +89,10 @@ async def login_finish(
     await account.save_auth(db, settings, auth)
     await request.app.state.after_login(db, settings)
     return await _render(request, db)
+
+
+@router.post("/pairing-code", response_class=HTMLResponse)
+async def pairing_code(request: Request, db: AsyncSession = Depends(get_session)):
+    clock = pairing.get_clock(request)
+    code = await pairing.create_code(db, now=clock())
+    return await _render(request, db, pairing_code=code)
