@@ -147,3 +147,42 @@ async def test_setup_button_shows_code_once(api, db):
 
 async def test_setup_pairing_code_requires_basic_auth(api):
     assert (await api.post("/setup/pairing-code")).status_code == 401
+
+
+async def test_concurrent_wrong_guesses_capped_at_5(app, db):
+    import asyncio
+
+    code = await new_code(db)
+    wrong = "000000" if code != "000000" else "111111"
+
+    async def attempt():
+        async with app.state.session_factory() as s:
+            try:
+                await pairing.redeem(s, wrong, now=T0)
+            except pairing.PairingError:
+                pass
+
+    await asyncio.gather(*(attempt() for _ in range(20)))
+    row = (await db.execute(select(PairingCode))).scalar_one()
+    assert row.failed_attempts == 5
+    async with app.state.session_factory() as s:
+        with pytest.raises(pairing.PairingError):
+            await pairing.redeem(s, code, now=T0)
+
+
+async def test_concurrent_correct_redeems_single_winner(app, db):
+    import asyncio
+
+    code = await new_code(db)
+
+    async def attempt():
+        async with app.state.session_factory() as s:
+            try:
+                return await pairing.redeem(s, code, now=T0)
+            except pairing.PairingError:
+                return None
+
+    results = await asyncio.gather(attempt(), attempt())
+    assert len([r for r in results if r]) == 1
+    devices = (await db.execute(select(Device).where(Device.revoked_at.is_(None)))).scalars().all()
+    assert len(devices) == 1

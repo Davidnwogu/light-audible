@@ -48,8 +48,10 @@ async def create_code(db: AsyncSession, now: datetime | None = None) -> str:
 async def redeem(db: AsyncSession, code: str, now: datetime | None = None) -> str:
     """Exchange a valid pairing code for a new device token, revoking all earlier devices."""
     now = now or _utcnow()
-    row = (await db.execute(select(PairingCode).limit(1))).scalar_one_or_none()
+    # Row lock serializes concurrent redeems: attempts counting and consumption are race-free.
+    row = (await db.execute(select(PairingCode).limit(1).with_for_update())).scalar_one_or_none()
     if row is None or row.expires_at <= now or row.failed_attempts >= MAX_FAILED_ATTEMPTS:
+        await db.rollback()
         raise PairingError("invalid_code")
     if not secrets.compare_digest(row.code_hash, _sha256(code)):
         row.failed_attempts += 1
