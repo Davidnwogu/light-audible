@@ -31,10 +31,16 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-async def client(settings: Settings):
-    transport = httpx.ASGITransport(app=create_app(settings))
+def app(settings: Settings):
+    return create_app(settings)
+
+
+@pytest.fixture
+async def client(app):
+    transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
+    await app.state.engine.dispose()
 
 
 TEST_DATABASE_URL = "postgresql+asyncpg://localhost/light_audible_test"
