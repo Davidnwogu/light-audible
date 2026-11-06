@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from cryptography.fernet import Fernet
 from pydantic import field_validator
@@ -14,6 +15,8 @@ class Settings(BaseSettings):
     s3_access_key_id: str
     s3_secret_access_key: str
     s3_region: str = "us-east-1"
+    # "path" for MinIO; Railway buckets use "virtual" (virtual-hosted style).
+    s3_addressing_style: Literal["path", "virtual"] = "path"
     auth_encryption_key: str
     setup_password: str
     audible_locale: str = "us"

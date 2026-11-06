@@ -104,3 +104,17 @@ async def test_evict_failure_leaves_no_ready_row_for_missing_object(db, storage,
     assert "A1" not in {r.asin for r in rows}
     for r in rows:
         assert r.status != "ready" or exists(storage, r.object_key)
+
+
+def test_presigned_url_uses_virtual_hosted_style_when_configured(settings):
+    virtual = settings.model_copy(
+        update={"s3_endpoint": "https://t3.example.dev", "s3_addressing_style": "virtual"}
+    )
+    url = Storage(virtual).presign("books/x.m4b")
+    assert url.startswith(f"https://{settings.s3_bucket}.t3.example.dev/books/x.m4b?")
+
+
+def test_presigned_url_uses_path_style_by_default(settings):
+    path = settings.model_copy(update={"s3_endpoint": "https://t3.example.dev"})
+    url = Storage(path).presign("books/x.m4b")
+    assert url.startswith(f"https://t3.example.dev/{settings.s3_bucket}/books/x.m4b?")
