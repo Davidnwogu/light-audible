@@ -1,3 +1,4 @@
+import copy
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -48,7 +49,9 @@ async def audible_session(
     if acct.status != "ok" or acct.encrypted_auth is None:
         raise NeedsSignIn()
     auth = crypto.decrypt_auth(acct.encrypted_auth, settings.auth_encryption_key)
-    session = factory(auth)
+    # Authenticator.from_dict mutates its input, so hand the factory a copy and
+    # compare against the untouched original.
+    session = factory(copy.deepcopy(auth))
     try:
         yield session
     except AuthExpired as e:

@@ -71,3 +71,45 @@ async def test_auth_expired_marks_needs_sign_in(db, settings):
     acct = await account.get_account(db, settings)
     await db.refresh(acct)
     assert acct.status == "needs_sign_in"
+
+
+class MutatingSession:
+    """Mimics audible.Authenticator.from_dict, which mutates the dict it is given."""
+
+    def __init__(self, auth: dict):
+        self.auth = auth
+        auth["access_token"] = "refreshed"
+        auth.pop("locale_code", None)
+
+    def export_auth(self) -> dict:
+        return {**self.auth, "locale_code": "us"}
+
+
+async def test_session_factory_mutating_input_still_persists_refresh(db, settings):
+    await account.save_auth(db, settings, {"access_token": "old", "locale_code": "us"})
+    async with account.audible_session(db, settings, MutatingSession):
+        pass
+    acct = await account.get_account(db, settings)
+    await db.refresh(acct)
+    assert crypto.decrypt_auth(acct.encrypted_auth, settings.auth_encryption_key) == {
+        "access_token": "refreshed",
+        "locale_code": "us",
+    }
+
+
+async def test_session_no_change_when_factory_mutates_but_export_matches(db, settings):
+    await account.save_auth(db, settings, {"access_token": "same", "locale_code": "us"})
+
+    class Quiet:
+        def __init__(self, auth: dict):
+            auth.pop("locale_code")  # consume like from_dict
+
+        def export_auth(self) -> dict:
+            return {"access_token": "same", "locale_code": "us"}
+
+    before = (await account.get_account(db, settings)).encrypted_auth
+    async with account.audible_session(db, settings, Quiet):
+        pass
+    acct = await account.get_account(db, settings)
+    await db.refresh(acct)
+    assert acct.encrypted_auth == before
