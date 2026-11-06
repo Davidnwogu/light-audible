@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from botocore.exceptions import ClientError
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from light_audible import account, converter
@@ -267,3 +268,24 @@ async def test_ffmpeg_error_redacted_short_output(db, worker, signed_in, monkeyp
     await worker.run_once()
     conv = await reload(db, Conversion, "B1")
     assert conv.error == "bad key *** iv ***"
+
+
+async def test_row_deleted_mid_conversion_cleans_up_object(
+    db, settings, fake, session_factory, storage, signed_in, fixture_m4a
+):
+    class DeletesRowDuringDownload(FakeAudibleSession):
+        async def download(self, url, dest):
+            await super().download(url, dest)
+            async with session_factory() as other:  # e.g. a library sync removing the book
+                await other.execute(delete(Conversion).where(Conversion.asin == "B1"))
+                await other.commit()
+
+    session = DeletesRowDuringDownload(
+        auth=AUTH, licenses=fake.licenses, download_source=fixture_m4a
+    )
+    worker = converter.Worker(session_factory, settings, lambda auth: session, storage, clock=lambda: NOW)
+    await seed(db, status="preparing")
+    assert await worker.run_once() is True
+    assert await reload(db, Conversion, "B1") is None
+    with pytest.raises(ClientError):
+        storage._client.head_object(Bucket=storage._bucket, Key="books/B1.m4b")

@@ -86,18 +86,29 @@ async def convert_one(
         await _run_ffmpeg(ffmpeg_args(src, dest, lic.key, lic.iv), secrets=(lic.key, lic.iv))
         size = await asyncio.to_thread(storage.upload, dest, key)
 
-    conv = await db.get(Conversion, asin)
-    if conv is None:  # book removed from the library mid-conversion
+    finished_at = _utcnow()
+    # Atomic: the row may have been deleted (e.g. library sync) while we converted.
+    marked = (
+        await db.execute(
+            update(Conversion)
+            .where(Conversion.asin == asin, Conversion.status == "preparing")
+            .values(
+                status="ready",
+                object_key=key,
+                size_bytes=size,
+                error=None,
+                finished_at=finished_at,
+                # The user just asked to play it: don't make it the first eviction candidate.
+                last_played_at=finished_at,
+            )
+            .returning(Conversion.asin)
+            .execution_options(synchronize_session="fetch")
+        )
+    ).scalar_one_or_none()
+    await db.commit()
+    if marked is None:
         await asyncio.to_thread(storage.delete, key)
         return
-    conv.status = "ready"
-    conv.object_key = key
-    conv.size_bytes = size
-    conv.error = None
-    conv.finished_at = _utcnow()
-    # The user just asked to play it: don't make a fresh conversion the first eviction candidate.
-    conv.last_played_at = conv.finished_at
-    await db.commit()
     await evict_if_needed(db, storage, settings.bucket_soft_limit_bytes, protect={asin})
 
 
