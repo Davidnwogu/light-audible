@@ -50,13 +50,17 @@ async def save(
     stmt = insert(Position).values(
         asin=asin, position_ms=position_ms, updated_at=client_updated_at
     )
-    await db.execute(
+    applied = await db.execute(
         stmt.on_conflict_do_update(
             index_elements=["asin"],
             set_={"position_ms": stmt.excluded.position_ms, "updated_at": stmt.excluded.updated_at},
-        )
+            where=Position.updated_at <= stmt.excluded.updated_at,
+        ).returning(Position.asin)
     )
+    fresh = applied.first() is not None
     await db.commit()
+    if not fresh:
+        return  # stale write: a newer position is already stored
 
     acct = await account.get_account(db, settings)
     book = await db.get(Book, asin)

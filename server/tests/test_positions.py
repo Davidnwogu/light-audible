@@ -88,6 +88,17 @@ async def test_put_saves_and_syncs(db, settings, factory, fake, signed_in):
     assert (await db.get(Position, "B1")).position_ms == 6000
 
 
+async def test_stale_put_does_not_regress(db, settings, factory, fake, signed_in):
+    await seed_book(db)
+    await positions.save(db, settings, factory, "B1", 9000, T0 + timedelta(minutes=5))
+    await positions.save(db, settings, factory, "B1", 1000, T0)
+    db.expire_all()
+    row = await db.get(Position, "B1")
+    assert (row.position_ms, row.updated_at) == (9000, T0 + timedelta(minutes=5))
+    assert fake.set_position_calls == [("B1", "ACR1", 9000)]
+    assert (await acct(db)).consecutive_sync_failures == 0
+
+
 async def test_five_failures_disable_sync(db, settings, factory, fake, signed_in):
     await seed_book(db)
     fake.fail_set_position = True
