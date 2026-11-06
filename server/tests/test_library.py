@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime, timezone
 
 import pytest
@@ -12,7 +13,7 @@ T0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 AUTH = {"access_token": "x"}
 
 
-def item(asin, title="T", purchase=date(2025, 1, 1), authors=("A", "B"), narrators=("N",)):
+def item(asin, title="T", purchase=date(2025, 1, 1), authors=("A", "Smith, Jr."), narrators=("N",)):
     return LibraryItem(asin, title, list(authors), list(narrators), 3_600_000, purchase)
 
 
@@ -46,7 +47,7 @@ async def test_sync_inserts_books(db, settings, factory, fake, signed_in):
     assert await library.sync_library(db, settings, factory) == 2
     books = (await db.execute(select(Book).order_by(Book.asin))).scalars().all()
     assert [b.title for b in books] == ["One", "Two"]
-    assert books[0].authors == "A, B"
+    assert json.loads(books[0].authors) == ["A", "Smith, Jr."]
     assert (await account.get_account(db, settings)).library_synced_at is not None
 
 
@@ -88,7 +89,7 @@ async def test_library_etag_304(client, db, settings, factory, fake, signed_in, 
     body = resp.json()
     assert [b["asin"] for b in body] == ["B2", "B1"]
     assert body[0] == {
-        "asin": "B2", "title": "T", "authors": ["A", "B"], "narrators": ["N"],
+        "asin": "B2", "title": "T", "authors": ["A", "Smith, Jr."], "narrators": ["N"],
         "runtime_ms": 3_600_000, "playable": True,
     }
     etag = resp.headers["etag"]

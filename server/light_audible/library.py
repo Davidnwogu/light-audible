@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
@@ -9,12 +10,9 @@ from light_audible.config import Settings
 from light_audible.models import Book, Conversion
 from light_audible.models import Chapter as ChapterRow
 
-# authors/narrators are stored as "A, B" text and split back into lists by the API.
-NAME_SEP = ", "
-
-
+# authors/narrators are stored as JSON text (a list of names) so any name round-trips.
 def split_names(value: str) -> list[str]:
-    return value.split(NAME_SEP) if value else []
+    return json.loads(value) if value else []
 
 
 async def sync_library(db: AsyncSession, settings: Settings, factory: SessionFactory) -> int:
@@ -28,8 +26,8 @@ async def sync_library(db: AsyncSession, settings: Settings, factory: SessionFac
             book = Book(asin=it.asin)
             db.add(book)
         book.title = it.title
-        book.authors = NAME_SEP.join(it.authors)
-        book.narrators = NAME_SEP.join(it.narrators)
+        book.authors = json.dumps(it.authors)
+        book.narrators = json.dumps(it.narrators)
         book.runtime_ms = it.runtime_ms
         book.purchase_date = it.purchase_date
         # playable / unplayable_reason are deliberately left untouched.

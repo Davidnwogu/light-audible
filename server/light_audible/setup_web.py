@@ -1,3 +1,4 @@
+import logging
 import secrets
 from dataclasses import asdict
 from pathlib import Path
@@ -16,6 +17,7 @@ from light_audible.models import Book
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 _basic = HTTPBasic(auto_error=False)
+log = logging.getLogger(__name__)
 
 
 def require_setup_password(
@@ -36,6 +38,7 @@ async def _render(
     *,
     login_url: str | None = None,
     error: str | None = None,
+    note: str | None = None,
     pairing_code: str | None = None,
 ) -> HTMLResponse:
     acct = await account.get_account(db, request.app.state.settings)
@@ -51,6 +54,7 @@ async def _render(
             "position_sync_enabled": acct.position_sync_enabled,
             "login_url": login_url,
             "error": error,
+            "note": note,
             "pairing_code": pairing_code,
         },
     )
@@ -87,7 +91,17 @@ async def login_finish(
     except Exception:
         return await _render(request, db, error="Audible sign-in failed. Start again and retry.")
     await account.save_auth(db, settings, auth)
-    await request.app.state.after_login(db, settings)
+    try:
+        await request.app.state.after_login(db, settings)
+    except Exception as e:
+        # Sign-in already succeeded; log only the exception type (no auth data / redirect URL).
+        log.warning("post-login library sync failed: %s", type(e).__name__)
+        await db.rollback()
+        return await _render(
+            request,
+            db,
+            note="Signed in. Your library couldn't be loaded yet — refresh it from the phone.",
+        )
     return await _render(request, db)
 
 

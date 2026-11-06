@@ -112,3 +112,16 @@ async def test_status_page_shows_library_count_and_sync_state(client, app):
 async def test_pending_login_verifier_never_rendered(client, fake_login):
     resp = await client.post("/setup/login/start", headers=GOOD)
     assert "fake-verifier" not in resp.text
+
+
+async def test_finish_login_survives_after_login_failure(client, app, fake_login):
+    async def boom(db, settings):
+        raise RuntimeError("sync exploded")
+
+    app.state.after_login = boom
+    await client.post("/setup/login/start", headers=GOOD)
+    resp = await client.post("/setup/login/finish", headers=GOOD, data={"redirect_url": GOOD_URL})
+    assert resp.status_code == 200
+    assert (await _account(app)).status == "ok"
+    assert "Signed in. Your library couldn&#39;t be loaded yet" in resp.text or "couldn't be loaded yet" in resp.text
+    assert "refresh it from the phone" in resp.text
