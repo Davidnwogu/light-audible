@@ -24,12 +24,12 @@ The server refuses to start if `SETUP_PASSWORD` is shorter than 8 characters or 
 
 ## Deploy to Railway
 
-1. Create a Railway project and add an empty service for this repo (root directory `server/`).
+1. Create a Railway project and add a service for this repo, with its root directory set to `server/`.
 2. Add a **Postgres** database. On the service, set `DATABASE_URL` to the reference variable `${{Postgres.DATABASE_URL}}`.
 3. Add a **Bucket**. It exposes S3 credentials and endpoint as service variables; reference them rather than copying values:
    `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` (use the matching variable names the bucket shows, e.g. `${{Bucket.<NAME>}}`).
 4. Set the remaining variables: `AUTH_ENCRYPTION_KEY` (generated as above), `SETUP_PASSWORD` (8+ chars), `AUDIBLE_LOCALE` (default `us`), `PUBLIC_BASE_URL` (the service's public URL, with `https://`), and optionally `BUCKET_SOFT_LIMIT_BYTES`.
-5. Generate a public domain for the service, then deploy from `server/`:
+5. Generate a public domain for the service, then deploy from the `server/` directory (the service root):
 
    ```sh
    railway up

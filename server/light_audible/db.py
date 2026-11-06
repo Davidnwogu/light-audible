@@ -5,10 +5,25 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 
 def async_url(url: str) -> str:
+    """Make a libpq-style URL usable by SQLAlchemy's asyncpg dialect.
+
+    asyncpg rejects `sslmode` and `channel_binding`, so translate the former to
+    `ssl` and drop the latter.
+    """
     for prefix in ("postgresql://", "postgres://"):
         if url.startswith(prefix):
-            return "postgresql+asyncpg://" + url[len(prefix):]
-    return url
+            url = "postgresql+asyncpg://" + url[len(prefix):]
+            break
+    base, sep, query = url.partition("?")
+    if not sep:
+        return url
+    params = []
+    for part in query.split("&"):
+        key, eq, value = part.partition("=")
+        if key == "channel_binding":
+            continue
+        params.append("ssl" + eq + value if key == "sslmode" else part)
+    return base + ("?" + "&".join(params) if params else "")
 
 
 def make_engine(url: str) -> AsyncEngine:
