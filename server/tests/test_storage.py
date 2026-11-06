@@ -98,3 +98,27 @@ async def test_evict_skips_protected(db, storage, tmp_path):
     assert exists(storage, k_prot) and exists(storage, k_prep) and not exists(storage, k_other)
     asins = {r.asin for r in (await db.execute(Conversion.__table__.select())).all()}
     assert asins == {"PROT", "PREP"}
+
+
+async def test_evict_failure_leaves_no_ready_row_for_missing_object(db, storage, tmp_path, monkeypatch):
+    k1 = await add_conversion(db, storage, tmp_path, "A1", 100, played_days_ago=30)
+    await add_conversion(db, storage, tmp_path, "A2", 100, played_days_ago=20)
+    await add_conversion(db, storage, tmp_path, "A3", 100, played_days_ago=1)
+    real_delete = storage.delete
+    calls = []
+
+    def flaky(key):
+        calls.append(key)
+        if len(calls) == 2:
+            raise RuntimeError("s3 down")
+        real_delete(key)
+
+    monkeypatch.setattr(storage, "delete", flaky)
+    with pytest.raises(RuntimeError):
+        await evict_if_needed(db, storage, limit=0, protect=set())
+    await db.rollback()
+    assert not exists(storage, k1)
+    rows = (await db.execute(Conversion.__table__.select())).all()
+    assert "A1" not in {r.asin for r in rows}
+    for r in rows:
+        assert r.status != "ready" or exists(storage, r.object_key)

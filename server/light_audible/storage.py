@@ -59,9 +59,13 @@ async def evict_if_needed(
     for row in candidates:
         if total <= limit:
             break
-        await asyncio.to_thread(storage.delete, row.object_key or f"books/{row.asin}.m4b")
-        total -= row.size_bytes or 0
+        key = row.object_key or f"books/{row.asin}.m4b"
+        size = row.size_bytes or 0
+        # Row first, then object: a failure leaves an orphan object (harmless),
+        # never a ready row pointing at a missing object.
         await db.delete(row)
+        await db.commit()
+        await asyncio.to_thread(storage.delete, key)
+        total -= size
         evicted.append(row.asin)
-    await db.commit()
     return evicted
