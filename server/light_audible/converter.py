@@ -7,6 +7,7 @@ queued, NOT NULL is running. The worker claims one queued row at a time.
 import asyncio
 import logging
 import tempfile
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -109,7 +110,12 @@ async def convert_one(
     if marked is None:
         await asyncio.to_thread(storage.delete, key)
         return
-    await evict_if_needed(db, storage, settings.bucket_soft_limit_bytes, protect={asin})
+    try:
+        await evict_if_needed(db, storage, settings.bucket_soft_limit_bytes, protect={asin})
+    except Exception as e:
+        # The conversion itself succeeded; a failed eviction must not mark it failed.
+        await db.rollback()
+        log.warning("eviction after converting %s failed: %s", asin, type(e).__name__)
 
 
 def _short_error(e: BaseException) -> str:
@@ -132,6 +138,8 @@ class Worker:
         self.storage = storage
         self.clock = clock
         self.idle_sleep_s = 2.0
+        self.recover_interval_s = 300.0
+        self._last_recover: float | None = None
 
     async def run_forever(self) -> None:
         while True:
@@ -141,7 +149,21 @@ class Worker:
                 log.exception("conversion worker iteration failed")
                 worked = False
             if not worked:
+                await self._maybe_recover()
                 await asyncio.sleep(self.idle_sleep_s)
+
+    async def _maybe_recover(self) -> None:
+        now = time.monotonic()
+        if self._last_recover is not None and now - self._last_recover < self.recover_interval_s:
+            return
+        self._last_recover = now
+        try:
+            async with self.session_factory() as db:
+                n = await recover_stuck(db, self.clock())
+            if n:
+                log.info("re-queued %d stuck conversion(s)", n)
+        except Exception as e:
+            log.warning("stuck-conversion recovery failed: %s", type(e).__name__)
 
     async def run_once(self) -> bool:
         """Claim and process one queued conversion. Returns whether a row was processed."""
@@ -182,7 +204,7 @@ class Worker:
     ) -> None:
         await db.rollback()
         conv = await db.get(Conversion, asin, populate_existing=True)
-        if conv is None:
+        if conv is None or conv.status != "preparing":
             return
         if requeue:
             conv.started_at = None
@@ -195,7 +217,7 @@ class Worker:
     async def _on_transient(self, db: AsyncSession, asin: str, e: TransientError) -> None:
         await db.rollback()
         conv = await db.get(Conversion, asin, populate_existing=True)
-        if conv is None:
+        if conv is None or conv.status != "preparing":
             return
         conv.attempts += 1
         log.info("conversion of %s: transient error (attempt %d)", asin, conv.attempts)

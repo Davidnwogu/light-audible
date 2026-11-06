@@ -289,3 +289,54 @@ async def test_row_deleted_mid_conversion_cleans_up_object(
     assert await reload(db, Conversion, "B1") is None
     with pytest.raises(ClientError):
         storage._client.head_object(Bucket=storage._bucket, Key="books/B1.m4b")
+
+
+async def test_eviction_failure_leaves_new_book_ready(
+    db, settings, fake, session_factory, storage, signed_in, tmp_path, monkeypatch
+):
+    old = tmp_path / "old.m4b"
+    old.write_bytes(b"x" * 10_000)
+    storage.upload(old, "books/OLD.m4b")
+    await seed(db, "OLD", status="ready", object_key="books/OLD.m4b", size_bytes=10_000,
+               last_played_at=NOW - timedelta(days=10))
+    await seed(db, "B1", status="preparing")
+    settings.bucket_soft_limit_bytes = 1  # forces eviction of OLD
+
+    def boom(key):
+        raise RuntimeError("s3 down")
+
+    monkeypatch.setattr(storage, "delete", boom)
+    worker = converter.Worker(session_factory, settings, lambda auth: fake, storage, clock=lambda: NOW)
+    assert await worker.run_once() is True
+    assert (await reload(db, Conversion, "B1")).status == "ready"
+
+
+async def test_finish_and_transient_do_not_touch_non_preparing_rows(db, worker):
+    await seed(db, status="ready", object_key="books/B1.m4b", size_bytes=1)
+    await worker._finish(db, "B1", error="late failure")
+    assert (await reload(db, Conversion, "B1")).status == "ready"
+    await worker._on_transient(db, "B1", TransientError("late"))
+    conv = await reload(db, Conversion, "B1")
+    assert (conv.status, conv.attempts) == ("ready", 0)
+
+
+async def test_run_forever_recovers_stuck_rows_without_restart(db, worker, monkeypatch):
+    await seed(db, status="preparing", started_at=NOW - timedelta(minutes=31))
+
+    async def no_work():
+        return False
+
+    monkeypatch.setattr(worker, "run_once", no_work)
+    worker.idle_sleep_s = 0.01
+    worker.recover_interval_s = 0
+    task = asyncio.create_task(worker.run_forever())
+    try:
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if (await reload(db, Conversion, "B1")).started_at is None:
+                break
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert (await reload(db, Conversion, "B1")).started_at is None
