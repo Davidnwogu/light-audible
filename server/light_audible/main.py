@@ -4,8 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from light_audible import setup_web
+from light_audible.audible_gateway import login as audible_login
 from light_audible.config import Settings, get_settings
 from light_audible.db import make_engine
+
+
+async def _no_after_login(db: AsyncSession, settings: Settings) -> None:
+    return None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -21,6 +27,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    app.state.login = audible_login
+    app.state.after_login = _no_after_login
+    app.include_router(setup_web.router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

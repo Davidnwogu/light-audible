@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Status</h2>
+<ul>
+  <li>Account: {{ status }}</li>
+  <li>Library: {{ library_count }} books</li>
+  <li>Position sync: {{ "on" if position_sync_enabled else "off" }}</li>
+</ul>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+{% if login_url %}
+<h2>Sign in to Audible</h2>
+<ol>
+  <li><a href="{{ login_url }}" target="_blank" rel="noopener">Sign in to Amazon</a></li>
+  <li>After signing in you'll see a 'Page not found' page from Amazon. Copy the whole address from your browser's address bar and paste it here.</li>
+</ol>
+<form method="post" action="/setup/login/finish">
+  <input type="text" name="redirect_url" placeholder="https://www.amazon.com/ap/maplanding?..." required>
+  <button type="submit">Finish sign-in</button>
+</form>
+{% else %}
+<form method="post" action="/setup/login/start">
+  <button type="submit">{{ "Sign in again" if status == "ok" else "Sign in to Audible" }}</button>
+</form>
+{% endif %}
+{% endblock %}
