@@ -1,5 +1,7 @@
 from functools import lru_cache
 
+from cryptography.fernet import Fernet
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +19,22 @@ class Settings(BaseSettings):
     audible_locale: str = "us"
     public_base_url: str
     bucket_soft_limit_bytes: int = 8_000_000_000
+
+    @field_validator("setup_password")
+    @classmethod
+    def _setup_password_long_enough(cls, value: str) -> str:
+        if len(value) < 8:
+            raise ValueError("SETUP_PASSWORD must be at least 8 characters")
+        return value
+
+    @field_validator("auth_encryption_key")
+    @classmethod
+    def _encryption_key_is_fernet(cls, value: str) -> str:
+        try:
+            Fernet(value)
+        except Exception as exc:
+            raise ValueError("AUTH_ENCRYPTION_KEY must be a valid Fernet key") from exc
+        return value
 
 
 @lru_cache

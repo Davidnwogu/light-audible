@@ -28,7 +28,7 @@ def settings() -> Settings:
         s3_secret_access_key="minioadmin",
         s3_region="us-east-1",
         auth_encryption_key=Fernet.generate_key().decode(),
-        setup_password="test-pw",
+        setup_password="test-setup-pw",
         public_base_url="http://testserver",
     )
 

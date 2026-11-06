@@ -8,7 +8,7 @@ from sqlalchemy import select
 from light_audible import pairing
 from light_audible.models import Device, PairingCode
 
-BASIC = {"Authorization": "Basic " + base64.b64encode(b"user:test-pw").decode()}
+BASIC = {"Authorization": "Basic " + base64.b64encode(b"user:test-setup-pw").decode()}
 T0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 

@@ -13,7 +13,7 @@ def basic(password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
-GOOD = basic("test-pw")
+GOOD = basic("test-setup-pw")
 GOOD_URL = "https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=abc123"
 
 
