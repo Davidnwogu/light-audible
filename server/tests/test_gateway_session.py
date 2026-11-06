@@ -3,6 +3,7 @@ import pytest
 
 from light_audible.audible_gateway import AuthExpired, PendingLogin, TransientError
 from light_audible.audible_gateway import login
+from light_audible.audible_gateway import session as session_mod
 from light_audible.audible_gateway.session import map_errors
 from audible import exceptions as aex
 
@@ -28,6 +29,35 @@ def test_map_errors(exc, expected):
     with pytest.raises(expected):
         with map_errors():
             raise exc
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [aex.NotFoundError(_resp(404), {}), aex.BadRequest(_resp(400), {}), aex.UnexpectedError(_resp(418), {})],
+)
+def test_map_errors_permanent_4xx_not_transient(exc):
+    with pytest.raises(type(exc)) as ei:
+        with map_errors():
+            raise exc
+    assert not isinstance(ei.value, TransientError)
+
+
+async def test_download_read_timeout_is_transient(monkeypatch, tmp_path):
+    def handler(request):
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    real = httpx.AsyncClient
+    seen = {}
+
+    def client(**kw):
+        seen.update(kw)
+        return real(transport=httpx.MockTransport(handler), **kw)
+
+    monkeypatch.setattr(session_mod.httpx, "AsyncClient", client)
+    s = object.__new__(session_mod.RealAudibleSession)
+    with pytest.raises(TransientError):
+        await s.download("https://cdn.test/x", tmp_path / "x.m4b")
+    assert seen["timeout"].read == 120.0 and seen["timeout"].connect == 30.0
 
 
 def test_start_login_builds_url_and_verifier():

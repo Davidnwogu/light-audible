@@ -25,6 +25,7 @@ _TRANSIENT = (
     httpx.TransportError,
 )
 _DOWNLOAD_UA = "Audible/671 CFNetwork/1240.0.4 Darwin/20.6.0"
+_DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, read=120.0)
 _AUTH = (aex.Unauthorized, aex.NoRefreshToken)
 
 
@@ -42,7 +43,13 @@ def map_errors():
         if e.response.status_code >= 500:
             raise TransientError(str(e)) from e
         raise AuthExpired() from e
+    except aex.StatusError as e:
+        # permanent 4xx (400, 404, ...) propagate unchanged
+        if e.code >= 500:
+            raise TransientError(str(e)) from e
+        raise
     except aex.RequestError as e:
+        # non-status request failures (wrapped httpx errors)
         raise TransientError(str(e) or type(e).__name__) from e
 
 
@@ -105,7 +112,7 @@ class RealAudibleSession:
     # verified against live account in Task 12
     async def download(self, url: str, dest: Path) -> None:
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=None) as http:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=_DOWNLOAD_TIMEOUT) as http:
                 async with http.stream("GET", url, headers={"User-Agent": _DOWNLOAD_UA}) as resp:
                     resp.raise_for_status()
                     with open(dest, "wb") as f:
