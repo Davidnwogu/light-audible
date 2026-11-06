@@ -3,8 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import boto3
 import httpx
 import pytest
+from botocore.config import Config
 from cryptography.fernet import Fernet
 
 from sqlalchemy import text
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from light_audible.config import Settings
 from light_audible.db import make_engine
 from light_audible.main import create_app
+from light_audible.storage import Storage
 
 
 @pytest.fixture
@@ -67,3 +70,19 @@ async def db(migrated_database: str):
     async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session
     await engine.dispose()
+
+
+@pytest.fixture
+def storage(settings) -> Storage:
+    client = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        region_name=settings.s3_region,
+        config=Config(s3={"addressing_style": "path"}),
+    )
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=settings.s3_bucket):
+        for obj in page.get("Contents", []):
+            client.delete_object(Bucket=settings.s3_bucket, Key=obj["Key"])
+    return Storage(settings)

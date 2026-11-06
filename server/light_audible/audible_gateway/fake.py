@@ -22,6 +22,7 @@ class FakeAudibleSession:
         fail_set_position: bool = False,
         download_source: Path | None = None,
         auth: dict | None = None,
+        license_errors: dict[str, Exception] | None = None,
     ):
         self.library = library or []
         self.chapters = chapters or {}
@@ -30,6 +31,7 @@ class FakeAudibleSession:
         self.fail_set_position = fail_set_position
         self.download_source = download_source
         self.auth = auth if auth is not None else {}
+        self.license_errors = license_errors if license_errors is not None else {}
         self.set_position_calls: list[tuple[str, str, int]] = []
         self.fetch_chapters_calls: list[str] = []
 
@@ -41,6 +43,8 @@ class FakeAudibleSession:
         return list(self.chapters.get(asin, []))
 
     async def request_license(self, asin: str) -> License:
+        if asin in self.license_errors:
+            raise self.license_errors[asin]
         try:
             return self.licenses[asin]
         except KeyError:

@@ -1,32 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import boto3
 import httpx
 import pytest
-from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from light_audible.models import Book, Conversion
 from light_audible.storage import Storage, evict_if_needed
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-
-@pytest.fixture
-def storage(settings) -> Storage:
-    client = boto3.client(
-        "s3",
-        endpoint_url=settings.s3_endpoint,
-        aws_access_key_id=settings.s3_access_key_id,
-        aws_secret_access_key=settings.s3_secret_access_key,
-        region_name=settings.s3_region,
-        config=Config(s3={"addressing_style": "path"}),
-    )
-    for page in client.get_paginator("list_objects_v2").paginate(Bucket=settings.s3_bucket):
-        for obj in page.get("Contents", []):
-            client.delete_object(Bucket=settings.s3_bucket, Key=obj["Key"])
-    return Storage(settings)
 
 
 def exists(storage: Storage, key: str) -> bool:

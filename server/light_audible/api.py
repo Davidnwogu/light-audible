@@ -1,13 +1,19 @@
+import asyncio
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from light_audible import account, library, pairing
+from light_audible import account, converter, library, pairing
 from light_audible.config import Settings
 from light_audible.db import get_session
-from light_audible.models import Book, Device
+from light_audible.models import Book, Conversion, Device
+
+PRESIGN_EXPIRES_S = 21600
 
 router = APIRouter(prefix="/api")
 
@@ -88,3 +94,90 @@ async def refresh_library(
         await db.rollback()
         return JSONResponse({"error": "audible_error"}, status_code=502)
     return await _library_json(db, settings)
+
+
+def _not_found() -> JSONResponse:
+    return JSONResponse({"error": "not_found"}, status_code=404)
+
+
+def _book_state(book: Book, conv: Conversion | None) -> dict:
+    if not book.playable:
+        return {"status": "unplayable", "error": book.unplayable_reason}
+    if conv is None:
+        return {"status": "not_ready"}
+    state: dict = {"status": conv.status}
+    if conv.status == "failed":
+        state["error"] = conv.error
+    return state
+
+
+@router.get("/books/{asin}")
+async def get_book(
+    asin: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    _device: Device = Depends(pairing.require_device),
+):
+    book = await db.get(Book, asin)
+    if book is None:
+        return _not_found()
+    state = _book_state(book, await db.get(Conversion, asin))
+    chapters = await library.get_chapters(
+        db, request.app.state.settings, request.app.state.audible_factory, asin
+    )
+    state["chapters"] = [
+        {"idx": c.idx, "title": c.title, "start_ms": c.start_ms, "length_ms": c.length_ms}
+        for c in chapters
+    ]
+    return state
+
+
+@router.post("/books/{asin}/prepare")
+async def prepare_book(
+    asin: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    clock=Depends(pairing.get_clock),
+    _device: Device = Depends(pairing.require_device),
+):
+    book = await db.get(Book, asin)
+    if book is None:
+        return _not_found()
+    if not book.playable:
+        return _book_state(book, None)
+
+    # Idempotent under concurrency: only one queued row per asin can ever be created.
+    await db.execute(
+        insert(Conversion)
+        .values(asin=asin, status="preparing", attempts=0)
+        .on_conflict_do_nothing(index_elements=["asin"])
+    )
+    conv = (
+        await db.execute(select(Conversion).where(Conversion.asin == asin).with_for_update())
+    ).scalar_one()
+
+    if conv.status == "failed":
+        conv.status = "preparing"
+        conv.attempts = 0
+        conv.error = None
+        conv.started_at = None
+        conv.finished_at = None
+        await db.commit()
+        return _book_state(book, conv)
+
+    if conv.status == "ready":
+        now = clock()
+        key = conv.object_key or converter.object_key(asin)
+        url = await asyncio.to_thread(
+            request.app.state.storage.presign, key, PRESIGN_EXPIRES_S
+        )
+        conv.last_played_at = now
+        await db.commit()
+        return {
+            "status": "ready",
+            "url": url,
+            "url_expires_at": (now + timedelta(seconds=PRESIGN_EXPIRES_S)).isoformat(),
+        }
+
+    await db.commit()
+    return _book_state(book, conv)
