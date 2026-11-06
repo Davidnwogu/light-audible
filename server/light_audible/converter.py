@@ -43,7 +43,7 @@ def object_key(asin: str) -> str:
 def ffmpeg_args(src: Path, dest: Path, key: str, iv: str) -> list[str]:
     return [
         "ffmpeg", "-y", "-audible_key", key, "-audible_iv", iv, "-i", str(src),
-        "-map", "0:a", "-map_chapters", "0", "-c", "copy", str(dest),
+        "-map", "0:a", "-map_chapters", "0", "-c", "copy", "-movflags", "+faststart", str(dest),
     ]
 
 

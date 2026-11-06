@@ -94,7 +94,7 @@ async def reload(db, model, key):
 def test_ffmpeg_args_exact():
     assert converter.ffmpeg_args(Path("/t/in.aaxc"), Path("/t/out.m4b"), "k", "v") == [
         "ffmpeg", "-y", "-audible_key", "k", "-audible_iv", "v", "-i", "/t/in.aaxc",
-        "-map", "0:a", "-map_chapters", "0", "-c", "copy", "/t/out.m4b",
+        "-map", "0:a", "-map_chapters", "0", "-c", "copy", "-movflags", "+faststart", "/t/out.m4b",
     ]
 
 
