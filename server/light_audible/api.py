@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request
@@ -14,6 +15,8 @@ from light_audible.db import get_session
 from light_audible.models import Book, Conversion, Device
 
 PRESIGN_EXPIRES_S = 21600
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -90,7 +93,8 @@ async def refresh_library(
         await library.sync_library(db, settings, request.app.state.audible_factory)
     except account.NeedsSignIn:
         raise
-    except Exception:
+    except Exception as e:
+        log.warning("library refresh failed: %s", type(e).__name__)
         await db.rollback()
         return JSONResponse({"error": "audible_error"}, status_code=502)
     return await _library_json(db, settings)
@@ -98,6 +102,13 @@ async def refresh_library(
 
 def _not_found() -> JSONResponse:
     return JSONResponse({"error": "not_found"}, status_code=404)
+
+
+async def _require_signed_in(db: AsyncSession, settings: Settings) -> None:
+    acct = await account.get_account(db, settings)
+    await db.refresh(acct)
+    if acct.status != "ok":
+        raise account.NeedsSignIn()
 
 
 def _book_state(book: Book, conv: Conversion | None) -> dict:
@@ -121,10 +132,25 @@ async def get_book(
     book = await db.get(Book, asin)
     if book is None:
         return _not_found()
-    state = _book_state(book, await db.get(Conversion, asin))
-    chapters = await library.get_chapters(
-        db, request.app.state.settings, request.app.state.audible_factory, asin
-    )
+    settings = request.app.state.settings
+    conv = await db.get(Conversion, asin)
+    ready = conv is not None and conv.status == "ready"
+    if not ready:
+        await _require_signed_in(db, settings)
+    state = _book_state(book, conv)
+    try:
+        chapters = await library.get_chapters(
+            db, settings, request.app.state.audible_factory, asin
+        )
+    except account.NeedsSignIn:
+        if not ready:
+            raise
+        chapters = []
+    except Exception as e:
+        # Chapters are best-effort: still return the book's state.
+        log.warning("chapter fetch for %s failed: %s", asin, type(e).__name__)
+        await db.rollback()
+        chapters = []
     state["chapters"] = [
         {"idx": c.idx, "title": c.title, "start_ms": c.start_ms, "length_ms": c.length_ms}
         for c in chapters
@@ -145,6 +171,10 @@ async def prepare_book(
         return _not_found()
     if not book.playable:
         return _book_state(book, None)
+
+    existing = await db.get(Conversion, asin)
+    if existing is None or existing.status != "ready":
+        await _require_signed_in(db, request.app.state.settings)
 
     # Idempotent under concurrency: only one queued row per asin can ever be created.
     await db.execute(

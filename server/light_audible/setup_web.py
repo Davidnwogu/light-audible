@@ -92,7 +92,8 @@ async def login_finish(
         auth = await request.app.state.login.finish_login(pending, redirect_url.strip())
     except ValueError as e:
         return await _render(request, db, error=str(e))
-    except Exception:
+    except Exception as e:
+        log.warning("finish_login failed: %s", type(e).__name__)
         return await _render(request, db, error="Audible sign-in failed. Start again and retry.")
     await account.save_auth(db, settings, auth)
     try:

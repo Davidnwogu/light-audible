@@ -141,3 +141,41 @@ async def test_prepare_unplayable_returned_as_is(client, db, headers, signed_in)
     resp = await client.post("/api/books/B1/prepare", headers=headers)
     assert resp.json() == {"status": "unplayable", "error": "Not entitled"}
     assert await reload(db, "B1") is None
+
+
+async def test_get_book_chapter_fetch_error_returns_state_without_chapters(
+    client, db, fake, headers, signed_in, monkeypatch
+):
+    async def boom(asin):
+        raise RuntimeError("secret detail")
+
+    monkeypatch.setattr(fake, "fetch_chapters", boom)
+    await seed(db)
+    resp = await client.get("/api/books/B1", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "not_ready", "chapters": []}
+    db.expire_all()
+    assert (await db.get(Book, "B1")).chapters_fetched is False
+
+
+async def test_get_book_needs_sign_in_when_signed_out_and_not_ready(client, db, headers):
+    await seed(db)
+    resp = await client.get("/api/books/B1", headers=headers)
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "needs_sign_in"}
+
+
+async def test_prepare_needs_sign_in_when_signed_out_and_not_ready(client, db, headers):
+    await seed(db)
+    resp = await client.post("/api/books/B1/prepare", headers=headers)
+    assert resp.status_code == 409
+    assert resp.json() == {"error": "needs_sign_in"}
+    assert await reload(db, "B1") is None
+
+
+async def test_ready_book_playable_while_signed_out(client, db, storage_on_app, headers):
+    await seed(db, status="ready", object_key="books/B1.m4b", size_bytes=1)
+    prep = await client.post("/api/books/B1/prepare", headers=headers)
+    assert prep.status_code == 200 and prep.json()["status"] == "ready" and "url" in prep.json()
+    got = await client.get("/api/books/B1", headers=headers)
+    assert got.status_code == 200 and got.json()["status"] == "ready"
