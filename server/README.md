@@ -24,7 +24,7 @@ The server refuses to start if `SETUP_PASSWORD` is shorter than 8 characters or 
 
 ## Deploy to Railway
 
-1. Create a Railway project from the GitHub repo. In the service settings set **Root Directory** to `server` and **Config file path** to `/server/railway.json` (the config path does not follow the root directory). Railway deploys on every push to the connected branch; disconnect the branch in **Settings → Source** to deploy manually, and set **Watch paths** to `/server/**` to skip deploys for changes outside the server.
+1. Create a Railway project from the GitHub repo. In the service settings set **Root Directory** to `server`; Railway builds the `Dockerfile` there. Under **Settings → Deploy**, set the healthcheck path to `/api/health` (timeout 60s) and the restart policy to *On Failure* with 5 retries. Railway deploys on every push to the connected branch; disconnect the branch in **Settings → Source** to deploy manually, and set **Watch paths** to `/server/**` to skip deploys for changes outside the server.
 2. Add a **Postgres** database. On the service, set `DATABASE_URL` to `${{Postgres.DATABASE_URL}}`.
 3. Add a **Bucket** and reference its variables (replace `Bucket` with the bucket's name in the project):
    - `S3_ENDPOINT=${{Bucket.ENDPOINT}}`
@@ -34,7 +34,7 @@ The server refuses to start if `SETUP_PASSWORD` is shorter than 8 characters or 
    - `S3_REGION=${{Bucket.REGION}}`
    - `S3_ADDRESSING_STYLE=virtual` (use `path` only if the bucket's Credentials tab says so)
 4. Set the remaining variables: `AUTH_ENCRYPTION_KEY` (generated as above), `SETUP_PASSWORD` (8+ chars), `AUDIBLE_LOCALE` (default `us`), `PUBLIC_BASE_URL` (the service's public URL, with `https://`), and optionally `BUCKET_SOFT_LIMIT_BYTES`.
-5. Generate a public domain for the service (**Settings → Networking**). The container runs `alembic upgrade head` and then starts uvicorn on `$PORT`. Railway checks `/api/health`.
+5. Set `PORT=8000`, then generate a public domain for the service (**Settings → Networking**) with target port `8000`. The container runs `alembic upgrade head` and then starts uvicorn on `$PORT`. Railway checks `/api/health`.
 6. Open `<PUBLIC_BASE_URL>/setup` to sign in to Audible and create a pairing code.
 
 ## Moving the database to Neon
