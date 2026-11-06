@@ -78,6 +78,15 @@ def test_parse_lastposition():
     assert pos.updated_at == datetime(2025, 1, 2, 3, 4, 5, 678000, tzinfo=UTC)
 
 
+def test_parse_lastposition_treats_naive_timestamp_as_utc():
+    # The live API sends last_updated without a timezone, e.g. "2025-01-02 03:04:05.678".
+    resp = {"asin_last_position_heard_annots": [{"asin": "B0ABC12345", "last_position_heard": {
+        "status": "Exists", "position_ms": 5, "last_updated": "2025-01-02 03:04:05.678"}}]}
+    pos = parse.parse_lastposition(resp, "B0ABC12345")
+    assert pos is not None
+    assert pos.updated_at == datetime(2025, 1, 2, 3, 4, 5, 678000, tzinfo=UTC)
+
+
 def test_parse_lastposition_none_when_not_exists():
     assert parse.parse_lastposition(load("lastpositions_none.json"), "B0ABC12345") is None
     assert parse.parse_lastposition({"asin_last_position_heard_annots": []}, "B0ABC12345") is None

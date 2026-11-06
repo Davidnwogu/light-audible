@@ -1,6 +1,6 @@
 """Pure parsers for Audible API responses (no network, no `audible` import)."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from light_audible.audible_gateway import (
@@ -62,6 +62,12 @@ def parse_license(license_response: dict[str, Any], voucher: dict[str, Any]) -> 
     return License(url=url, key=voucher["key"], iv=voucher["iv"], acr=acr)
 
 
+def _utc(value: str) -> datetime:
+    """Parse an Audible timestamp; the live API omits the zone, which is UTC."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def parse_lastposition(resp: dict[str, Any], asin: str) -> RemotePosition | None:
     for annot in resp.get("asin_last_position_heard_annots") or []:
         if annot.get("asin") != asin:
@@ -71,6 +77,6 @@ def parse_lastposition(resp: dict[str, Any], asin: str) -> RemotePosition | None
             return None
         return RemotePosition(
             position_ms=int(pos["position_ms"]),
-            updated_at=datetime.fromisoformat(pos["last_updated"].replace("Z", "+00:00")),
+            updated_at=_utc(pos["last_updated"]),
         )
     return None
