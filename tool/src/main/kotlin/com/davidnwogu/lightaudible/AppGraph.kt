@@ -6,6 +6,7 @@ import com.davidnwogu.lightaudible.api.AuthState
 import com.davidnwogu.lightaudible.api.OkHttpServerApi
 import com.davidnwogu.lightaudible.api.ServerApi
 import com.davidnwogu.lightaudible.api.ServerClock
+import com.davidnwogu.lightaudible.playback.PlaybackSession
 import com.davidnwogu.lightaudible.store.DataStoreToolStore
 import com.davidnwogu.lightaudible.store.ToolStore
 import com.davidnwogu.lightaudible.sync.Downloads
@@ -21,7 +22,7 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 
-/** Process-wide object graph. Later tasks add preparer, downloads and playback. */
+/** Process-wide object graph. */
 class AppGraph(dataStore: DataStore<Preferences>, val filesDir: File) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val store: ToolStore = DataStoreToolStore(dataStore)
@@ -43,6 +44,7 @@ class AppGraph(dataStore: DataStore<Preferences>, val filesDir: File) {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
     val downloads = Downloads(filesDir, downloadHttp, preparer, scope)
+    val playback = PlaybackSession(positions, preparer, downloads, scope) { clock.now().toEpochMilli() }
 }
 
 object Graph {

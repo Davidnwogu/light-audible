@@ -1,0 +1,353 @@
+package com.davidnwogu.lightaudible.playback
+
+import com.davidnwogu.lightaudible.api.ApiResult
+import com.davidnwogu.lightaudible.api.BookState
+import com.davidnwogu.lightaudible.api.BookStatus
+import com.davidnwogu.lightaudible.api.LibraryBook
+import com.davidnwogu.lightaudible.api.RemotePosition
+import com.davidnwogu.lightaudible.api.ServerClock
+import com.davidnwogu.lightaudible.fakes.FakePlayback
+import com.davidnwogu.lightaudible.fakes.FakePlayback.Call
+import com.davidnwogu.lightaudible.fakes.FakePlaybackFactory
+import com.davidnwogu.lightaudible.fakes.FakeServerApi
+import com.davidnwogu.lightaudible.fakes.InMemoryToolStore
+import com.davidnwogu.lightaudible.sync.Downloads
+import com.davidnwogu.lightaudible.sync.PositionSync
+import com.davidnwogu.lightaudible.sync.Preparer
+import java.io.File
+import java.time.Instant
+import kotlin.io.path.createTempDirectory
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class PlaybackSessionTest {
+    private val api = FakeServerApi()
+    private val store = InMemoryToolStore()
+    private val dir = createTempDirectory("pb").toFile()
+    private val factory = FakePlaybackFactory()
+    private val t0 = Instant.parse("2030-01-01T00:00:00Z").toEpochMilli()
+    private val clock = ServerClock({ t0 }, 0, {})
+    private val bookA = LibraryBook("A", "Book A", listOf("Ann"), listOf("N"), 36_000_000L, true)
+    private val bookB = LibraryBook("B", "Book B", listOf("Bob"), listOf("N"), 36_000_000L, true)
+    private val resume = mutableMapOf<String, Long>()
+    private val sourceError = PlaybackError(isSource = true, diagnostic = "ERROR_CODE_IO_BAD_HTTP_STATUS")
+
+    init {
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Ready, url(it, api.prepareCalls.size), "2030-01-01T06:00:00Z")) }
+        api.positionResult = { ApiResult.Ok(RemotePosition(resume[it] ?: 0L, "2029-12-31T00:00:00Z")) }
+        api.putPositionResult = { ApiResult.Ok(Unit) }
+    }
+
+    private fun url(asin: String, n: Int) = "https://s/$asin?v=$n"
+    private fun item(book: LibraryBook, source: PlaybackSource) =
+        PlaybackItem(book.asin, book.title, book.authors.first(), source)
+
+    private fun TestScope.session(): PlaybackSession {
+        val preparer = Preparer(api, 5_000)
+        val downloads = Downloads(dir, OkHttpClient(), preparer, backgroundScope)
+        return PlaybackSession(PositionSync(api, store, clock), preparer, downloads, backgroundScope) {
+            t0 + testScheduler.currentTime
+        }
+    }
+
+    private fun records() = api.putPositionCalls.map { it.asin to it.positionMs }
+    private fun FakePlayback.replaces() = calls.filterIsInstance<Call.ReplaceItem>()
+
+    @Test
+    fun openWithNothingLive() = runTest {
+        resume["A"] = 42_000
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(1, factory.openCount)
+        assertEquals(
+            listOf(Call.AwaitReady, Call.SetItem(item(bookA, PlaybackSource.Url(url("A", 1))), 42_000), Call.Play),
+            factory.last.calls,
+        )
+        val st = s.state.value
+        assertEquals(Phase.Ready, st.phase)
+        assertEquals("A", st.asin)
+        assertEquals("Book A", st.title)
+        assertEquals(42_000, st.positionMs)
+        assertTrue(st.isPlaying)
+    }
+
+    @Test
+    fun openReusesLiveItemForSameAsin() = runTest {
+        factory.next = {
+            FakePlayback().apply {
+                currentItemId.value = "A"
+                positionMs.value = 99_000
+                isPlaying.value = true
+            }
+        }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val calls = factory.last.calls
+        assertTrue(calls.none { it is Call.SetItem || it is Call.SeekTo || it is Call.ReplaceItem }, "$calls")
+        assertTrue(api.positionCalls.isEmpty())
+        assertTrue(api.prepareCalls.isEmpty())
+        assertEquals(99_000, s.state.value.positionMs)
+        assertEquals(Phase.Ready, s.state.value.phase)
+    }
+
+    @Test
+    fun openDifferentBookWhileOnePlaysRecordsOldPositionFirst() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 500_000
+        runCurrent()
+        resume["B"] = 7_000
+        s.open(bookB, factory)
+        runCurrent()
+        assertEquals(1, factory.openCount)
+        assertEquals(listOf("A" to 500_000L), records())
+        val sets = p.calls.filterIsInstance<Call.SetItem>()
+        assertEquals(Call.SetItem(item(bookB, PlaybackSource.Url(url("B", 2))), 7_000), sets.last())
+        assertEquals("B", s.state.value.asin)
+        assertEquals(7_000, s.state.value.positionMs)
+    }
+
+    @Test
+    fun downloadedBookUsesFileSource() = runTest {
+        val f = File(dir, "A.m4b").apply { writeBytes(byteArrayOf(1)) }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(Call.SetItem(item(bookA, PlaybackSource.File(f)), 0), factory.last.calls[1])
+        assertTrue(api.prepareCalls.isEmpty())
+    }
+
+    @Test
+    fun cachedUrlReusedUntilTenMinutesBeforeExpiry() = runTest {
+        val s = session()
+        suspend fun openPauseDetach() {
+            s.open(bookA, factory)
+            runCurrent()
+            s.togglePlay()
+            s.detach()
+            runCurrent()
+            assertTrue(factory.last.released)
+        }
+        openPauseDetach()
+        assertEquals(1, api.prepareCalls.size)
+        advanceTimeBy(5 * 3_600_000L + 49 * 60_000L)
+        openPauseDetach()
+        assertEquals(1, api.prepareCalls.size)
+        assertEquals(PlaybackSource.Url(url("A", 1)), (factory.last.calls[1] as Call.SetItem).item.source)
+        advanceTimeBy(2 * 60_000L)
+        openPauseDetach()
+        assertEquals(2, api.prepareCalls.size)
+        assertEquals(PlaybackSource.Url(url("A", 2)), (factory.last.calls[1] as Call.SetItem).item.source)
+        assertEquals(3, factory.openCount)
+    }
+
+    @Test
+    fun reportsOnPauseAndEvery60Seconds() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        advanceTimeBy(30_000)
+        p.positionMs.value = 30_000
+        advanceTimeBy(60_000)
+        p.positionMs.value = 90_000
+        advanceTimeBy(35_000)
+        assertEquals(listOf("A" to 30_000L, "A" to 90_000L), records())
+        p.positionMs.value = 125_000
+        s.togglePlay()
+        runCurrent()
+        assertEquals(listOf("A" to 30_000L, "A" to 90_000L, "A" to 125_000L), records())
+        advanceTimeBy(180_000)
+        assertEquals(3, records().size)
+        assertFalse(p.released)
+    }
+
+    @Test
+    fun detachWhilePausedReleasesHandle() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 7_000
+        s.togglePlay()
+        runCurrent()
+        assertEquals(listOf("A" to 7_000L), records())
+        s.detach()
+        runCurrent()
+        assertTrue(p.released)
+        assertEquals(listOf("A" to 7_000L, "A" to 7_000L), records())
+        assertEquals(Phase.Idle, s.state.value.phase)
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(2, factory.openCount)
+    }
+
+    @Test
+    fun detachWhilePlayingKeepsHandleUntilPause() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        s.detach()
+        runCurrent()
+        assertFalse(p.released)
+        p.positionMs.value = 8_000
+        p.isPlaying.value = false // paused from the lock screen
+        runCurrent()
+        assertTrue(p.released)
+        assertEquals(listOf("A" to 8_000L), records())
+    }
+
+    @Test
+    fun sourceErrorRefreshesUrlAndResumesAtSavedPosition() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 3_600_000
+        runCurrent()
+        p.error.value = sourceError
+        p.isPlaying.value = false
+        p.positionMs.value = 0 // the player resets its position on error
+        runCurrent()
+        assertEquals(2, api.prepareCalls.size)
+        val tail = p.calls.takeLast(2)
+        assertEquals(Call.ReplaceItem(item(bookA, PlaybackSource.Url(url("A", 2))), 3_600_000), tail[0])
+        assertEquals(Call.Play, tail[1])
+        assertEquals(listOf("A" to 3_600_000L), records())
+        assertEquals(Phase.Ready, s.state.value.phase)
+    }
+
+    @Test
+    fun repeatedSourceErrorsBackOff() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 1_000
+        runCurrent()
+        p.playStarts = false
+        p.isPlaying.value = false
+        p.error.value = sourceError
+        runCurrent()
+        assertEquals(1, p.replaces().size) // first error: immediate refresh
+        for (d in listOf(2_000L, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000)) {
+            p.error.value = sourceError
+            runCurrent()
+            assertEquals(Phase.Reconnecting, s.state.value.phase)
+            val before = p.replaces().size
+            advanceTimeBy(d - 1)
+            runCurrent()
+            assertEquals(before, p.replaces().size, "waited less than $d")
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(before + 1, p.replaces().size, "after $d")
+            assertEquals(1_000, p.replaces().last().startMs)
+        }
+        assertEquals(9, api.prepareCalls.size)
+        p.isPlaying.value = true
+        runCurrent()
+        assertEquals(Phase.Ready, s.state.value.phase)
+        p.isPlaying.value = false
+        p.error.value = sourceError
+        runCurrent()
+        assertEquals(9, p.replaces().size) // backoff reset: immediate again
+    }
+
+    @Test
+    fun nonSourceErrorFailsWithoutRetry() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.error.value = PlaybackError(isSource = false, diagnostic = "ERROR_CODE_DECODING_FAILED")
+        p.isPlaying.value = false
+        runCurrent()
+        advanceTimeBy(120_000)
+        assertEquals(Phase.Failed("Couldn't play this book"), s.state.value.phase)
+        assertEquals(1, api.prepareCalls.size)
+        assertTrue(p.replaces().isEmpty())
+    }
+
+    @Test
+    fun preparingPhases() = runTest {
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Preparing)) }
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.Preparing)) }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(Phase.Preparing, s.state.value.phase)
+        assertEquals("A", s.state.value.asin)
+        assertTrue(factory.last.calls.none { it is Call.SetItem })
+    }
+
+    @Test
+    fun needsSignInPhase() = runTest {
+        api.prepareResult = { ApiResult.NeedsSignIn }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(Phase.NeedsSignIn, s.state.value.phase)
+    }
+
+    @Test
+    fun failedPreparationThenRetry() = runTest {
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Failed, error = "ffmpeg")) }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(Phase.Failed("Couldn't prepare this book"), s.state.value.phase)
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Ready, url(it, 9), "2030-01-01T06:00:00Z")) }
+        s.retry()
+        runCurrent()
+        assertEquals(2, api.prepareCalls.size)
+        assertEquals(Phase.Ready, s.state.value.phase)
+        assertEquals(PlaybackSource.Url(url("A", 9)), factory.last.calls.filterIsInstance<Call.SetItem>().single().item.source)
+    }
+
+    @Test
+    fun refusedHandleFails() = runTest {
+        factory.next = { FakePlayback().apply { ready = false } }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(Phase.Failed("Couldn't play this book"), s.state.value.phase)
+        assertTrue(factory.last.released)
+    }
+
+    @Test
+    fun skipSeeksToClampedTarget() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.durationMs.value = 60_000
+        p.positionMs.value = 50_000
+        runCurrent()
+        s.skip(30_000)
+        assertEquals(Call.SeekTo(60_000), p.calls.last())
+        s.skip(-30_000)
+        assertEquals(Call.SeekTo(30_000), p.calls.last())
+    }
+
+    @Test
+    fun skipTargetClamps() {
+        assertEquals(0, skipTarget(5_000, 60_000, -30_000))
+        assertEquals(60_000, skipTarget(55_000, 60_000, 30_000))
+        assertEquals(35_000, skipTarget(5_000, 0, 30_000))
+        assertEquals(0, skipTarget(5_000, 0, -30_000))
+    }
+}
