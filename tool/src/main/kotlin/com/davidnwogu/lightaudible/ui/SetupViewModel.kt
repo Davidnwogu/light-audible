@@ -8,6 +8,7 @@ import com.davidnwogu.lightaudible.api.ServerApi
 import com.davidnwogu.lightaudible.normalizeServerUrl
 import com.davidnwogu.lightaudible.store.ToolStore
 import com.thelightphone.sdk.LightViewModel
+import com.thelightphone.sdk.SimpleLightScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,12 +45,20 @@ class SetupViewModel(
         }
     }
 
+    // True once the OpenLibrary route was consumed; the next show means Library was popped.
+    private var libraryOpened = false
+
     fun consumeRoute() {
+        if (_route.value == SetupRoute.OpenLibrary) libraryOpened = true
         _route.value = null
     }
 
-    /** Called when the Library screen has been popped back to Setup. */
-    fun onLibraryClosed() {
+    override fun onScreenShow(screen: SimpleLightScreen<Unit>) = onShown()
+
+    /** Called every time Setup becomes the current screen (first show, and when a child is popped). */
+    fun onShown() {
+        if (!libraryOpened) return
+        libraryOpened = false
         viewModelScope.launch {
             if (auth.signedOut.value || store.credentials() == null) showForm() else _route.value = SetupRoute.Exit
         }

@@ -131,8 +131,11 @@ class SetupViewModelTest {
     fun libraryClosedWhilePairedAsksToExit() = runTest {
         store.saveCredentials(Credentials("https://host", "tok"))
         val vm = vm()
+        vm.onShown() // initial show, before routing
+        advanceUntilIdle()
+        assertEquals(SetupRoute.OpenLibrary, vm.route.value)
         vm.consumeRoute()
-        vm.onLibraryClosed()
+        vm.onShown()
         advanceUntilIdle()
         assertEquals(SetupRoute.Exit, vm.route.value)
     }
@@ -141,9 +144,10 @@ class SetupViewModelTest {
     fun libraryClosedSignedOutShowsFormWithStoredUrl() = runTest {
         store.saveCredentials(Credentials("https://host", "tok"))
         val vm = vm()
+        vm.onShown()
         vm.consumeRoute()
         auth.lost()
-        vm.onLibraryClosed()
+        vm.onShown()
         advanceUntilIdle()
         assertNull(vm.route.value)
         assertEquals("https://host", vm.form().serverUrl)
@@ -162,5 +166,6 @@ class SetupViewModelTest {
         assertEquals(Credentials("https://host", "tok123"), store.credentials())
         assertEquals(false, auth.signedOut.value)
         assertEquals(SetupUiState.Paired, vm.state.value)
+        assertEquals(SetupRoute.OpenLibrary, vm.route.value)
     }
 }

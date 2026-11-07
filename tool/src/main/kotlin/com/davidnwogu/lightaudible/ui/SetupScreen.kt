@@ -40,7 +40,7 @@ class SetupScreen(activity: SealedLightActivity) : LightScreen<Unit, SetupViewMo
             when (route) {
                 SetupRoute.OpenLibrary -> {
                     viewModel.consumeRoute()
-                    navigateTo(::LibraryScreen) { viewModel.onLibraryClosed() }
+                    navigateTo(::LibraryScreen)
                 }
                 SetupRoute.Exit -> {
                     viewModel.consumeRoute()
