@@ -28,9 +28,9 @@ class PlaybackSession(
     private val downloads: Downloads,
     private val scope: CoroutineScope,
     private val nowMs: () -> Long,
-) {
+) : PlaybackControls {
     private val _state = MutableStateFlow(SessionState(null, null, 0, 0, false, Phase.Idle))
-    val state: StateFlow<SessionState> = _state.asStateFlow()
+    override val state: StateFlow<SessionState> = _state.asStateFlow()
 
     private var handle: Playback? = null
     private var factory: PlaybackFactory? = null
@@ -61,7 +61,7 @@ class PlaybackSession(
      * The Book screen's Play: always plays [book], reusing the live detached item when it is the same
      * book, and marks a screen attached. A Player screen shown again must call [attach], not this.
      */
-    fun open(book: LibraryBook, factory: PlaybackFactory) {
+    override fun open(book: LibraryBook, factory: PlaybackFactory) {
         attached = true
         if (this.book?.asin == book.asin && openJob?.isActive == true) return
         val switching = this.book?.asin != book.asin
@@ -76,15 +76,15 @@ class PlaybackSession(
         load(book, reuseLive = true)
     }
 
-    fun attach() { attached = true }
+    override fun attach() { attached = true }
 
-    fun detach() {
+    override fun detach() {
         attached = false
         val p = handle ?: return run { factory = null }
         if (!p.isPlaying.value && !maybeRelease()) scheduleCheck(if (playPending) PLAY_START_GRACE_MS else GRACE_MS)
     }
 
-    fun togglePlay() {
+    override fun togglePlay() {
         val p = handle ?: return
         val e = p.error.value
         if (recovering) {
@@ -103,9 +103,9 @@ class PlaybackSession(
         }
     }
 
-    fun skip(deltaMs: Long) = seekTo(skipTarget(lastPositionMs, _state.value.durationMs, deltaMs))
+    override fun skip(deltaMs: Long) = seekTo(skipTarget(lastPositionMs, _state.value.durationMs, deltaMs))
 
-    fun seekTo(ms: Long) {
+    override fun seekTo(ms: Long) {
         val p = handle ?: return
         if (item == null) return
         val target = ms.coerceAtLeast(0)
@@ -114,13 +114,14 @@ class PlaybackSession(
     }
 
     /** Runs preparation (and loading) again after a failure. */
-    fun retry() {
-        val b = book ?: return
-        if (_state.value.phase !is Phase.Failed && _state.value.phase !is Phase.NeedsSignIn) return
-        if (handle == null && factory == null) return
+    override fun retry(): Boolean {
+        val b = book ?: return false
+        if (_state.value.phase !is Phase.Failed && _state.value.phase !is Phase.NeedsSignIn) return false
+        if (handle == null && factory == null) return false
         stopRecovery()
         _state.update { it.copy(phase = Phase.Preparing) }
         load(b, reuseLive = false)
+        return true
     }
 
     private fun load(book: LibraryBook, reuseLive: Boolean) {
