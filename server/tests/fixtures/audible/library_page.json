@@ -1,0 +1,4 @@
+{"items":[
+{"asin":"B0ABC12345","title":"The Hobbit","authors":[{"asin":"B000AP9A6K","name":"J.R.R. Tolkien"}],"narrators":[{"name":"Rob Inglis"}],"runtime_length_min":660,"purchase_date":"2024-03-05T10:20:30.123Z","content_type":"Product"},
+{"asin":"B0DEF67890","title":"Dune","authors":[{"name":"Frank Herbert"}],"narrators":[{"name":"Scott Brick"},{"name":"Orlagh Cassidy"}],"runtime_length_min":1280,"purchase_date":"2023-11-20"}
+],"total_results":2}

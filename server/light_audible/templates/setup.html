@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Status</h2>
+<ul>
+  <li>Account: {{ status }}</li>
+  <li>Library: {{ library_count }} books</li>
+  <li>Position sync: {{ "on" if position_sync_enabled else "off" }}</li>
+</ul>
+{% if position_sync_auto_disabled %}<p class="note">Audible position sync turned off after repeated failures.</p>{% endif %}
+<form method="post" action="/setup/position-sync">
+  <button type="submit">{{ "Turn position sync off" if position_sync_enabled else "Turn position sync on" }}</button>
+</form>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if note %}<p class="note">{{ note }}</p>{% endif %}
+
+{% if login_url %}
+<h2>Sign in to Audible</h2>
+<ol>
+  <li><a href="{{ login_url }}" target="_blank" rel="noopener">Sign in to Amazon</a></li>
+  <li>After signing in you'll see a 'Page not found' page from Amazon. Copy the whole address from your browser's address bar and paste it here.</li>
+</ol>
+<form method="post" action="/setup/login/finish">
+  <input type="text" name="redirect_url" placeholder="https://www.amazon.com/ap/maplanding?..." required>
+  <button type="submit">Finish sign-in</button>
+</form>
+{% else %}
+<form method="post" action="/setup/login/start">
+  <button type="submit">{{ "Sign in again" if status == "ok" else "Sign in to Audible" }}</button>
+</form>
+{% endif %}
+
+<h2>Pair the app</h2>
+{% if pairing_code %}
+<p>Enter this code in the app within 10 minutes. It is shown only once: <strong>{{ pairing_code }}</strong></p>
+{% endif %}
+<form method="post" action="/setup/pairing-code">
+  <button type="submit">Generate pairing code</button>
+</form>
+{% endblock %}
