@@ -30,6 +30,8 @@ data class PlayerUiState(
     val statusLine: String?,
     val chapters: List<Chapter>,
     val showRetry: Boolean,
+    /** The current chapter's idx (titles may repeat); null without chapters. */
+    val chapterIdx: Int? = null,
 )
 
 class PlayerViewModel(
@@ -47,9 +49,11 @@ class PlayerViewModel(
         val positionMs = if (mine) s.positionMs else 0L
         val durationMs = if (mine && s.durationMs > 0) s.durationMs else book.runtimeMs ?: 0L
         val phase = if (mine) s.phase else Phase.Idle
+        val chapter = currentChapter(ch, positionMs)
         PlayerUiState(
             title = book.title,
-            chapterTitle = currentChapter(ch, positionMs)?.title,
+            chapterTitle = chapter?.title,
+            chapterIdx = chapter?.idx,
             position = formatDuration(positionMs),
             duration = formatDuration(durationMs),
             isPlaying = mine && s.isPlaying,

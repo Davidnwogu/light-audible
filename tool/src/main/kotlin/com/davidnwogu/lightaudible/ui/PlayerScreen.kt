@@ -60,7 +60,7 @@ class PlayerScreen(private val sealedActivity: SealedLightActivity, private val 
                         "${c.title}  ${formatDuration(c.lengthMs)}",
                         variant = LightTextVariant.Detail,
                         modifier = pad.lightClickable { viewModel.jumpTo(c) },
-                        lighten = c.title != state.chapterTitle,
+                        lighten = c.idx != state.chapterIdx,
                     )
                 }
             }

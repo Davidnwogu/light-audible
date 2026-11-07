@@ -69,8 +69,8 @@ class BookViewModel(
                 r.value.chapters?.let { _state.value = _state.value.copy(chapters = it) }
                 when (r.value.status) {
                     BookStatus.Failed -> STATUS_FAILED
-                    BookStatus.Preparing, BookStatus.NotReady -> STATUS_PREPARING
-                    else -> null
+                    BookStatus.Preparing -> STATUS_PREPARING
+                    else -> null // NotReady: nothing has started yet
                 }
             }
             ApiResult.NeedsSignIn, ApiResult.Unauthorized -> BANNER_SIGN_IN

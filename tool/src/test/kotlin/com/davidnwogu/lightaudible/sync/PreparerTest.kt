@@ -109,4 +109,11 @@ class PreparerTest {
         api.prepareResult = { ApiResult.NotFound }
         assertEquals(PrepareOutcome.NotFound, preparer.readyUrl("A") {})
     }
+
+    @Test
+    fun expiryWithOffsetParses() = runTest {
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Ready, "https://x/a.m4b", "2026-11-06T18:00:00+00:00")) }
+        val out = preparer.readyUrl("A") {}
+        assertEquals(PrepareOutcome.Ready("https://x/a.m4b", java.time.Instant.parse("2026-11-06T18:00:00Z")), out)
+    }
 }

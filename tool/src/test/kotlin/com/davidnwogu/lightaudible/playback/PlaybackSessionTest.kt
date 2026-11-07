@@ -245,7 +245,21 @@ class PlaybackSessionTest {
         advanceTimeBy(1_000)
         runCurrent()
         assertTrue(p.released)
-        assertEquals(listOf("A" to 8_000L), records())
+        assertEquals(listOf("A" to 0L, "A" to 8_000L), records()) // on detach, then on the pause
+    }
+
+    @Test
+    fun detachWhilePlayingReportsThePositionOnce() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 12_000
+        runCurrent()
+        s.detach()
+        runCurrent()
+        assertEquals(listOf("A" to 12_000L), records())
+        assertFalse(p.released)
     }
 
     @Test

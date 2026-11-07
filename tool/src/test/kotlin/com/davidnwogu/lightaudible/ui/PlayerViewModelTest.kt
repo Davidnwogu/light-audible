@@ -161,7 +161,19 @@ class PlayerViewModelTest {
         assertEquals("10:00", st.duration)
         assertTrue(st.isPlaying)
         assertEquals("Ch 1", st.chapterTitle)
+        assertEquals(1, st.chapterIdx)
         assertEquals(chapters, st.chapters)
+    }
+
+    @Test
+    fun currentChapterIsIdentifiedByIdxNotTitle() = runTest {
+        val sameTitles = listOf(Chapter(0, "Chapter", 0, 60_000), Chapter(1, "Chapter", 60_000, 60_000))
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.Ready, chapters = sameTitles)) }
+        val s = session(pos = 65_000)
+        val v = vm(s)
+        assertEquals(1, v.state.value.chapterIdx)
+        s.state.value = s.state.value.copy(positionMs = 5_000); advanceUntilIdle()
+        assertEquals(0, v.state.value.chapterIdx)
     }
 
     @Test
@@ -169,5 +181,6 @@ class PlayerViewModelTest {
         val v = vm(session())
         assertEquals(emptyList(), v.state.value.chapters)
         assertNull(v.state.value.chapterTitle)
+        assertNull(v.state.value.chapterIdx)
     }
 }

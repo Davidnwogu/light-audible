@@ -90,6 +90,8 @@ class PlaybackSession(
         attached = false
         val p = handle ?: return run { factory = null }
         if (recovering && recoveryOverdue) return giveUp()
+        // Playing: report now (the pause or release reports again later). Paused: the release reports.
+        if (p.isPlaying.value) item?.let { record(it, lastPositionMs) }
         if (!p.isPlaying.value && !maybeRelease()) scheduleCheck(if (playPending) PLAY_START_GRACE_MS else GRACE_MS)
     }
 

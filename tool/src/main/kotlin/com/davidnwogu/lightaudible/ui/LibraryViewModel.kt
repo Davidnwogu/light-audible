@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 
 const val BANNER_CONNECTING = "Connecting…"
 const val BANNER_SIGN_IN = "Sign in again on your setup page"
+const val BANNER_UNREACHABLE = "Can't reach the server."
 private const val STALE_AFTER_MS = 24L * 60 * 60 * 1000
 
 data class LibraryUiState(
@@ -114,7 +115,7 @@ class LibraryViewModel(
                 cache = bumped
             }
             ApiResult.NeedsSignIn, ApiResult.Unauthorized -> banner = BANNER_SIGN_IN
-            else -> Unit
+            else -> if (cache == null) banner = BANNER_UNREACHABLE // nothing to show otherwise
         }
         _state.value = _state.value.copy(loading = false, banner = banner)
     }

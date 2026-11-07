@@ -123,4 +123,12 @@ class BookViewModelTest {
         advanceTimeBy(20_000)
         assertNull(vm.state.value.downloadProgress)
     }
+
+    @Test
+    fun notReadyHasNoStatusLine() = runTest {
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.NotReady, chapters = chapters)) }
+        val vm = shown()
+        assertNull(vm.state.value.statusLine)
+        assertEquals(chapters, vm.state.value.chapters)
+    }
 }

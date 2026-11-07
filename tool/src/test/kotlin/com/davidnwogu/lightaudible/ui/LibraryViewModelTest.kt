@@ -95,11 +95,19 @@ class LibraryViewModelTest {
     }
 
     @Test
-    fun noCacheAndFailureIsEmptyWithoutBanner() = runTest {
+    fun noCacheAndFailureSaysServerIsUnreachable() = runTest {
         val vm = shown()
         assertEquals(emptyList(), vm.state.value.visible)
-        assertNull(vm.state.value.banner)
+        assertEquals("Can't reach the server.", vm.state.value.banner)
         assertFalse(vm.state.value.loading)
+    }
+
+    @Test
+    fun cachedBooksAndFailureHasNoBanner() = runTest {
+        store.saveLibraryCache(LibraryCache(old, "e1", now - 25 * hour))
+        val vm = shown()
+        assertEquals(old, vm.state.value.visible)
+        assertNull(vm.state.value.banner)
     }
 
     @Test

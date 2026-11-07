@@ -4,6 +4,7 @@ import com.davidnwogu.lightaudible.api.ApiResult
 import com.davidnwogu.lightaudible.api.BookStatus
 import com.davidnwogu.lightaudible.api.ServerApi
 import java.time.Instant
+import java.time.OffsetDateTime
 import kotlinx.coroutines.delay
 
 sealed interface PrepareOutcome {
@@ -67,7 +68,7 @@ class Preparer(private val api: ServerApi, private val pollIntervalMs: Long = 5_
         minOf(pollIntervalMs shl (failures - 1).coerceAtMost(10), MAX_BACKOFF_MS)
 
     private fun parseExpiry(s: String?): Instant =
-        runCatching { Instant.parse(s) }.getOrDefault(Instant.EPOCH)
+        runCatching { OffsetDateTime.parse(s).toInstant() }.getOrDefault(Instant.EPOCH)
 
     private companion object {
         const val MAX_BACKOFF_MS = 60_000L
