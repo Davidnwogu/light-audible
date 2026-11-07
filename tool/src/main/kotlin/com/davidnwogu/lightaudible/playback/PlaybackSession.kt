@@ -66,7 +66,12 @@ class PlaybackSession(
      */
     override fun open(book: LibraryBook, factory: PlaybackFactory) {
         attached = true
-        if (this.book?.asin == book.asin && openJob?.isActive == true) return
+        val newFactory = factory !== this.factory
+        if (!newFactory && this.book?.asin == book.asin && openJob?.isActive == true) return
+        // A handle opened through another (possibly finished) screen's factory is never reused: release it
+        // (detached playback keeps going; the real position is recorded if an item is loaded) and open a
+        // fresh one, whose live queue the reuse path below then keeps.
+        if (newFactory && handle != null) release()
         val switching = this.book?.asin != book.asin
         this.book = book
         this.factory = factory

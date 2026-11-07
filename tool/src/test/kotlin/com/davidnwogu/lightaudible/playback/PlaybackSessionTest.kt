@@ -102,6 +102,38 @@ class PlaybackSessionTest {
     }
 
     @Test
+    fun newFactoryGetsFreshHandleAndKeepsTheLiveQueue() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val old = factory.last
+        old.positionMs.value = 70_000
+        runCurrent()
+        s.detach() // the activity finished while A keeps playing detached
+        runCurrent()
+        // A new activity's Book screen plays the same book through its own factory.
+        val factory2 = FakePlaybackFactory {
+            FakePlayback().apply {
+                currentItemId.value = "A"
+                positionMs.value = 71_000
+                isPlaying.value = true
+            }
+        }
+        s.open(bookA, factory2)
+        runCurrent()
+        assertEquals(2, factory.openCount + factory2.openCount)
+        assertTrue(old.released)
+        assertTrue(old.calls.none { it == Call.Pause }, "${old.calls}") // released, never stopped
+        val fresh = factory2.last
+        assertTrue(fresh.calls.none { it is Call.SetItem || it is Call.ReplaceItem }, "${fresh.calls}")
+        assertTrue(records().none { it.second == 0L }, "${records()}")
+        assertTrue("A" to 70_000L in records(), "${records()}")
+        assertEquals(71_000, s.state.value.positionMs)
+        assertEquals(Phase.Ready, s.state.value.phase)
+        assertTrue(s.state.value.isPlaying)
+    }
+
+    @Test
     fun openDifferentBookWhileOnePlaysRecordsOldPositionFirst() = runTest {
         val s = session()
         s.open(bookA, factory)
