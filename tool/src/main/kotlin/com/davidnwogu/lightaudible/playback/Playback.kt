@@ -23,15 +23,16 @@ interface Playback {
     val durationMs: StateFlow<Long>
     val isPlaying: StateFlow<Boolean>
     val currentItemId: StateFlow<String?>
+    /** The current failure. A repeated identical failure may never re-emit, so poll [StateFlow.value] when it matters. */
     val error: StateFlow<PlaybackError?>
 
     /** Waits for the connection; false when the handle was refused or released. */
     suspend fun awaitReady(): Boolean
 
-    /** Replaces the queue with [item] and starts it at [startMs]. */
+    /** Replaces the queue with [item], prepares it, and starts it at [startMs]. Playback starts on [play]. */
     fun setItem(item: PlaybackItem, startMs: Long)
 
-    /** Swaps the current item's source (same id, so cached bytes are reused) and resumes at [startMs]. */
+    /** Reloads the current book from a fresh source (same id, so cached bytes are reused), prepared, at [startMs]. */
     fun replaceItem(item: PlaybackItem, startMs: Long)
 
     fun play()

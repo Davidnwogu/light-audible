@@ -37,7 +37,7 @@ class PlaybackSessionTest {
     private val t0 = Instant.parse("2030-01-01T00:00:00Z").toEpochMilli()
     private val clock = ServerClock({ t0 }, 0, {})
     private val bookA = LibraryBook("A", "Book A", listOf("Ann"), listOf("N"), 36_000_000L, true)
-    private val bookB = LibraryBook("B", "Book B", listOf("Bob"), listOf("N"), 36_000_000L, true)
+    private val bookB = LibraryBook("B", "Book B", listOf("Bob"), listOf("N"), 1_000_000L, true)
     private val resume = mutableMapOf<String, Long>()
     private val sourceError = PlaybackError(isSource = true, diagnostic = "ERROR_CODE_IO_BAD_HTTP_STATUS")
 
@@ -111,6 +111,8 @@ class PlaybackSessionTest {
         runCurrent()
         resume["B"] = 7_000
         s.open(bookB, factory)
+        assertEquals(0, s.state.value.positionMs)
+        assertEquals(1_000_000, s.state.value.durationMs)
         runCurrent()
         assertEquals(1, factory.openCount)
         assertEquals(listOf("A" to 500_000L), records())
@@ -207,6 +209,9 @@ class PlaybackSessionTest {
         p.positionMs.value = 8_000
         p.isPlaying.value = false // paused from the lock screen
         runCurrent()
+        assertFalse(p.released) // waits out an error that may follow the pause
+        advanceTimeBy(1_000)
+        runCurrent()
         assertTrue(p.released)
         assertEquals(listOf("A" to 8_000L), records())
     }
@@ -232,24 +237,21 @@ class PlaybackSessionTest {
     }
 
     @Test
-    fun repeatedSourceErrorsBackOff() = runTest {
+    fun repeatedIdenticalSourceErrorsBackOff() = runTest {
         val s = session()
         s.open(bookA, factory)
         runCurrent()
         val p = factory.last
         p.positionMs.value = 1_000
         runCurrent()
-        p.playStarts = false
-        p.isPlaying.value = false
-        p.error.value = sourceError
+        p.autoPrepare = false
+        p.prepareFails(sourceError) // and every reload keeps the identical error: no new emission
         runCurrent()
         assertEquals(1, p.replaces().size) // first error: immediate refresh
         for (d in listOf(2_000L, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000)) {
-            p.error.value = sourceError
-            runCurrent()
             assertEquals(Phase.Reconnecting, s.state.value.phase)
             val before = p.replaces().size
-            advanceTimeBy(d - 1)
+            advanceTimeBy(1_000 + d - 1) // 1 s to see the attempt fail, then the backoff
             runCurrent()
             assertEquals(before, p.replaces().size, "waited less than $d")
             advanceTimeBy(1)
@@ -258,13 +260,120 @@ class PlaybackSessionTest {
             assertEquals(1_000, p.replaces().last().startMs)
         }
         assertEquals(9, api.prepareCalls.size)
-        p.isPlaying.value = true
+        p.prepareSucceeds()
         runCurrent()
         assertEquals(Phase.Ready, s.state.value.phase)
-        p.isPlaying.value = false
-        p.error.value = sourceError
+        assertTrue(s.state.value.isPlaying)
+        advanceTimeBy(120_000)
+        assertEquals(8, p.replaces().size) // the loop stopped
+        p.prepareFails(sourceError)
         runCurrent()
         assertEquals(9, p.replaces().size) // backoff reset: immediate again
+    }
+
+    @Test
+    fun recoverySucceedsOnceTheReloadPrepares() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 3_600_000
+        runCurrent()
+        p.autoPrepare = false
+        p.prepareFails(sourceError)
+        p.positionMs.value = 0
+        runCurrent()
+        assertEquals(Call.ReplaceItem(item(bookA, PlaybackSource.Url(url("A", 2))), 3_600_000), p.replaces().single())
+        assertEquals(Call.Play, p.calls.last())
+        assertEquals(Phase.Reconnecting, s.state.value.phase)
+        assertFalse(s.state.value.isPlaying)
+        advanceTimeBy(500)
+        p.prepareSucceeds()
+        runCurrent()
+        assertEquals(Phase.Ready, s.state.value.phase)
+        assertTrue(s.state.value.isPlaying)
+        assertEquals(3_600_000, s.state.value.positionMs)
+        advanceTimeBy(30_000)
+        assertEquals(1, p.replaces().size)
+    }
+
+    @Test
+    fun identicalErrorAfterAMissedClearIsStillRecovered() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.autoPrepare = false
+        p.prepareFails(sourceError)
+        runCurrent()
+        assertEquals(1, p.replaces().size)
+        p.isPlaying.value = true // playing again, but the collector never saw the error clear
+        runCurrent()
+        assertEquals(Phase.Ready, s.state.value.phase)
+        p.isPlaying.value = false // fails again with the identical (unemitted) error
+        runCurrent()
+        assertEquals(1, p.replaces().size)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(2, p.replaces().size)
+        assertEquals(Phase.Reconnecting, s.state.value.phase)
+    }
+
+    @Test
+    fun detachedSourceErrorAfterPauseRecoversInsteadOfReleasing() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 20_000
+        runCurrent()
+        s.detach()
+        p.autoPrepare = false
+        p.isPlaying.value = false // the pause lands before the error
+        runCurrent()
+        p.error.value = sourceError
+        runCurrent()
+        assertEquals(1, p.replaces().size)
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertFalse(p.released)
+        p.prepareSucceeds()
+        runCurrent()
+        assertTrue(s.state.value.isPlaying)
+        advanceTimeBy(5_000)
+        assertFalse(p.released)
+        s.togglePlay()
+        advanceTimeBy(1_001)
+        assertTrue(p.released)
+        assertEquals(20_000, p.replaces().last().startMs)
+    }
+
+    @Test
+    fun loadFinishingWhileDetachedReleasesIfPlayNeverStarts() = runTest {
+        resume["A"] = 5_000
+        factory.next = { FakePlayback().apply { autoPrepare = false } }
+        val s = session()
+        s.open(bookA, factory)
+        s.detach() // left the Player screen while preparing
+        runCurrent()
+        val p = factory.last
+        assertTrue(p.calls.any { it is Call.SetItem })
+        advanceTimeBy(29_000)
+        assertFalse(p.released)
+        advanceTimeBy(1_001)
+        assertTrue(p.released)
+        assertEquals(listOf("A" to 5_000L), records())
+    }
+
+    @Test
+    fun loadFinishingWhileDetachedKeepsHandleOncePlaying() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        s.detach()
+        runCurrent()
+        advanceTimeBy(60_000)
+        assertFalse(factory.last.released)
+        assertTrue(s.state.value.isPlaying)
     }
 
     @Test

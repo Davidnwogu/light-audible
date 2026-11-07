@@ -15,32 +15,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-sealed interface Phase {
-    data object Idle : Phase
-    data object Preparing : Phase
-    data object Connecting : Phase
-    data object Ready : Phase
-    data object Reconnecting : Phase
-    data class Failed(val message: String) : Phase
-    data object NeedsSignIn : Phase
-    data object Unplayable : Phase
-}
-
-data class SessionState(
-    val asin: String?,
-    val title: String?,
-    val positionMs: Long,
-    val durationMs: Long,
-    val isPlaying: Boolean,
-    val phase: Phase,
-)
-
-/** [positionMs] + [deltaMs] clamped to the book; floored at 0 only while the duration is unknown. */
-fun skipTarget(positionMs: Long, durationMs: Long, deltaMs: Long): Long {
-    val target = positionMs + deltaMs
-    return if (durationMs <= 0) target.coerceAtLeast(0) else target.coerceIn(0, durationMs)
-}
-
 /**
  * Process-wide owner of the one detached [Playback] handle. Keeps reporting positions after the
  * Player screen closes, and releases the handle (never stops it) once paused with no screen attached.
@@ -68,10 +42,10 @@ class PlaybackSession(
     private var streamed = false
     private var lastPositionMs = 0L
     private var wasPlaying = false
+    private var playPending = false // play() asked for, isPlaying not yet true
 
-    /** From a source error until playback runs again; position updates are ignored meanwhile. */
+    /** While the recovery loop owns the item; position updates are ignored meanwhile. */
     private var recovering = false
-    private var sourceErrors = 0
     private val urls = HashMap<String, Pair<String, Long>>() // asin -> (url, expiresAtMs)
 
     private var loading: Any? = null // token of the running load
@@ -79,34 +53,46 @@ class PlaybackSession(
     private var openJob: Job? = null
     private var recoverJob: Job? = null
     private var tickJob: Job? = null
+    private var checkJob: Job? = null
 
-    /** Plays [book], reusing the live detached item when it is the same book. Marks the screen attached. */
+    /**
+     * The Book screen's Play: always plays [book], reusing the live detached item when it is the same
+     * book, and marks a screen attached. A Player screen shown again must call [attach], not this.
+     */
     fun open(book: LibraryBook, factory: PlaybackFactory) {
         attached = true
         if (this.book?.asin == book.asin && openJob?.isActive == true) return
+        val switching = this.book?.asin != book.asin
         this.book = book
         this.factory = factory
-        recoverJob?.cancel()
-        recovering = false
-        sourceErrors = 0
+        stopRecovery()
         _state.update {
-            it.copy(asin = book.asin, title = book.title, durationMs = book.runtimeMs ?: 0, phase = Phase.Preparing)
+            if (!switching) it.copy(phase = Phase.Preparing)
+            else SessionState(book.asin, book.title, 0, book.runtimeMs ?: 0, it.isPlaying, Phase.Preparing)
         }
         load(book, reuseLive = true)
     }
 
-    fun attach() {
-        attached = true
-    }
+    fun attach() { attached = true }
 
     fun detach() {
         attached = false
-        if (handle == null) factory = null else maybeRelease()
+        val p = handle ?: return run { factory = null }
+        if (!p.isPlaying.value && !maybeRelease()) scheduleCheck(if (playPending) PLAY_START_GRACE_MS else GRACE_MS)
     }
 
     fun togglePlay() {
         val p = handle ?: return
-        if (p.isPlaying.value) p.pause() else p.play()
+        if (recovering) {
+            stopRecovery()
+            _state.update { it.copy(phase = Phase.Ready) }
+            pause(p)
+            item?.let { record(it, lastPositionMs) }
+        } else if (p.isPlaying.value || playPending) {
+            pause(p)
+        } else {
+            requestPlay(p)
+        }
     }
 
     fun skip(deltaMs: Long) = seekTo(skipTarget(lastPositionMs, _state.value.durationMs, deltaMs))
@@ -124,9 +110,7 @@ class PlaybackSession(
         val b = book ?: return
         if (_state.value.phase !is Phase.Failed && _state.value.phase !is Phase.NeedsSignIn) return
         if (handle == null && factory == null) return
-        recoverJob?.cancel()
-        recovering = false
-        sourceErrors = 0
+        stopRecovery()
         _state.update { it.copy(phase = Phase.Preparing) }
         load(b, reuseLive = false)
     }
@@ -142,7 +126,7 @@ class PlaybackSession(
             } finally {
                 if (loading === token) loading = null
             }
-            if (!loaded) maybeRelease()
+            if (loaded) scheduleCheck(PLAY_START_GRACE_MS) else maybeRelease()
         }
     }
 
@@ -158,22 +142,22 @@ class PlaybackSession(
             item = asin
             streamed = !downloads.isDownloaded(asin)
             setPosition(p.positionMs.value)
-            p.play()
             _state.update { it.copy(phase = Phase.Ready) }
-            p.error.value?.let(::onError)
+            val e = p.error.value
+            if (e != null) onError(e) else requestPlay(p)
             return true
         }
         val resumeAt = lastPositionMs.takeIf { live == asin && item == asin && it > 0 }
         if (live != null && live != asin) record(live, if (item == live) lastPositionMs else p.positionMs.value)
         item = null
-        if (live != null && live != asin) p.pause()
+        if (live != null && live != asin) pause(p)
         val source = sourceFor(asin, fresh = false) ?: return false
         val start = resumeAt ?: positions.resumePoint(asin)
         p.setItem(playbackItem(book, source), start)
         item = asin
         streamed = source is PlaybackSource.Url
         setPosition(start)
-        p.play()
+        requestPlay(p)
         _state.update { it.copy(phase = Phase.Ready) }
         return true
     }
@@ -195,9 +179,10 @@ class PlaybackSession(
         _state.update { it.copy(isPlaying = playing) }
         if (playing) {
             wasPlaying = true
+            playPending = false
+            checkJob?.cancel()
             if (item != null) {
-                recovering = false
-                sourceErrors = 0
+                stopRecovery()
                 _state.update { it.copy(phase = Phase.Ready) }
             }
             if (tickJob?.isActive != true) {
@@ -211,32 +196,56 @@ class PlaybackSession(
         } else if (wasPlaying) {
             wasPlaying = false
             tickJob?.cancel()
-            if (!maybeRelease()) item?.let { record(it, lastPositionMs) }
+            item?.let { record(it, lastPositionMs) }
+            // An error may land just after the pause; the check recovers instead of releasing.
+            scheduleCheck(GRACE_MS, recordOnRelease = false)
         }
     }
 
+    /** Starts the recovery loop for a streamed item's source error; anything else fails. */
     private fun onError(e: PlaybackError) {
-        if (recoverJob?.isActive == true) return
+        if (recovering) return
         val asin = item ?: return
         val b = book?.takeIf { it.asin == asin } ?: return
-        if (!e.isSource || !streamed) return fail(PLAY_FAILED, releaseNow = false)
         val p = handle ?: return
+        if (!e.isSource || !streamed) return fail(PLAY_FAILED, releaseNow = false)
         recovering = true
-        val wait = if (sourceErrors == 0) 0L else minOf(2_000L shl (sourceErrors - 1).coerceAtMost(5), 60_000L)
-        sourceErrors++
+        checkJob?.cancel()
         _state.update { it.copy(phase = Phase.Reconnecting) }
+        // Owns the item until it plays (onPlaying cancels this). Polls the error rather than waiting
+        // for a new emission, so an identical repeated error is never conflated away.
         recoverJob = scope.launch {
-            delay(wait)
-            val source = sourceFor(asin, fresh = true)
-            if (source == null) {
-                recovering = false
-                maybeRelease()
-                return@launch
+            var attempt = 0
+            while (true) {
+                if (attempt > 0) delay(minOf(2_000L shl (attempt - 1).coerceAtMost(5), 60_000L))
+                val source = sourceFor(asin, fresh = true) ?: return@launch endRecovery()
+                p.replaceItem(playbackItem(b, source), lastPositionMs)
+                requestPlay(p)
+                attempt++
+                if (!attemptFailed(p)) {
+                    _state.update { it.copy(phase = Phase.Ready) } // neither plays nor fails: stop owning it
+                    return@launch endRecovery()
+                }
             }
-            p.replaceItem(playbackItem(b, source), lastPositionMs)
-            p.play()
         }
     }
+
+    /** True when the attempt ends in an error; false when it neither plays nor fails for a while. */
+    private suspend fun attemptFailed(p: Playback): Boolean {
+        repeat((ATTEMPT_MAX_MS / ATTEMPT_CHECK_MS).toInt()) {
+            delay(ATTEMPT_CHECK_MS)
+            if (p.error.value != null && !p.isPlaying.value) return true
+        }
+        return false
+    }
+
+    private fun endRecovery() {
+        recovering = false
+        playPending = false
+        scheduleCheck(0)
+    }
+
+    private fun stopRecovery() = recoverJob?.cancel().also { recovering = false }
 
     /** A File for a downloaded book, else a URL valid for 10+ more minutes; null after setting a failure phase. */
     private suspend fun sourceFor(asin: String, fresh: Boolean): PlaybackSource? {
@@ -264,36 +273,58 @@ class PlaybackSession(
 
     private fun fail(message: String, releaseNow: Boolean) {
         recovering = false
+        playPending = false
         _state.update { it.copy(phase = Phase.Failed(message)) }
         if (releaseNow) release() else maybeRelease()
     }
 
+    /** After [afterMs]: recover a pending error the collector missed, else release if idle. */
+    private fun scheduleCheck(afterMs: Long, recordOnRelease: Boolean = true) {
+        checkJob?.cancel()
+        checkJob = scope.launch {
+            delay(afterMs)
+            val p = handle ?: return@launch
+            if (p.isPlaying.value || recovering) return@launch
+            val e = p.error.value
+            if (e != null && !terminal()) onError(e) else maybeRelease(recordOnRelease, waitForPlay = false)
+        }
+    }
+
+    private fun terminal() = _state.value.phase.let { it is Phase.Failed || it is Phase.NeedsSignIn || it is Phase.Unplayable }
+
     /** Releases when paused, unattached and idle. Returns true when it released. */
-    private fun maybeRelease(): Boolean {
+    private fun maybeRelease(record: Boolean = true, waitForPlay: Boolean = true): Boolean {
         val p = handle ?: return false
         if (attached || p.isPlaying.value || recovering || loading != null) return false
-        release()
+        if (waitForPlay && playPending) return false
+        if (p.error.value != null && item != null && !terminal()) return false // recovery comes first
+        release(record)
         return true
     }
 
-    private fun release() {
+    private fun release(record: Boolean = true) {
         val p = handle ?: return
-        item?.let { record(it, lastPositionMs) }
-        listOf(watchJob, tickJob, recoverJob, openJob).forEach { it?.cancel() }
+        if (record) item?.let { record(it, lastPositionMs) }
+        listOf(watchJob, tickJob, recoverJob, openJob, checkJob).forEach { it?.cancel() }
         loading = null
         handle = null
         factory = null
         item = null
         wasPlaying = false
+        playPending = false
         recovering = false
-        sourceErrors = 0
         p.release()
         _state.update { it.copy(isPlaying = false, phase = if (it.phase is Phase.Ready) Phase.Idle else it.phase) }
     }
 
-    private fun record(asin: String, positionMs: Long) {
-        scope.launch { positions.record(asin, positionMs) }
+    private fun requestPlay(p: Playback) {
+        playPending = true // before play(): isPlaying may turn true inside it
+        p.play()
     }
+
+    private fun pause(p: Playback) = p.pause().also { playPending = false }
+
+    private fun record(asin: String, positionMs: Long) = scope.launch { positions.record(asin, positionMs) }
 
     private fun setPosition(ms: Long) {
         lastPositionMs = ms
@@ -308,5 +339,9 @@ class PlaybackSession(
         const val PLAY_FAILED = "Couldn't play this book"
         const val REPORT_INTERVAL_MS = 60_000L
         const val URL_MARGIN_MS = 10 * 60_000L
+        const val GRACE_MS = 1_000L
+        const val PLAY_START_GRACE_MS = 30_000L
+        const val ATTEMPT_CHECK_MS = 1_000L
+        const val ATTEMPT_MAX_MS = 30_000L
     }
 }

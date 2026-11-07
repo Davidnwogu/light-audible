@@ -16,18 +16,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Opens the process's detached player. Pass `LightPlaybackFactory(DefaultLightAudio(activity))`. */
 class LightPlaybackFactory(private val audio: LightAudio) : PlaybackFactory {
@@ -45,13 +45,21 @@ class LightPlaybackFactory(private val audio: LightAudio) : PlaybackFactory {
 /**
  * [Playback] over a [LightAudioPlayer]. Main-thread only.
  *
- * `LightAudioPlayer.seekTo` clamps to the resolved duration, which is 0 right after a queue change,
- * so a start position is applied once the new item reports a duration. Until then [positionMs]
- * reads the requested start and `play()` is held back, so playback never starts from 0 by accident.
+ * - Both [setItem] and [replaceItem] load through `setMediaQueue`, because only that prepares the
+ *   player (`replaceMediaItem` does not, so an item replaced after an error would sit idle). The queue
+ *   holds one book and the id is the asin, so cached bytes are still reused.
+ * - `LightAudioPlayer.seekTo` clamps to the resolved duration, which is 0 right after loading, so the
+ *   start position is applied once the item reports a duration. Until then [positionMs] reads the
+ *   requested start and `play()` is held back. The wait ends on a new player error (the session
+ *   recovers) or after [SEEK_WAIT_MAX_MS], when a held `play()` goes through anyway.
+ * - [currentItemId] and [error] are refreshed straight from the player in [awaitReady] and after
+ *   each load, so they never lag behind a collector.
  */
 class LightPlayback(private val player: LightAudioPlayer) : Playback {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _positionMs = MutableStateFlow(player.positionMs.value)
+    private val _currentItemId = MutableStateFlow(liveItemId())
+    private val _error = MutableStateFlow(player.error.value.toPlaybackError())
     private var pendingStart: Long? = null
     private var playWhenSeeked = false
     private var seekJob: Job? = null
@@ -59,25 +67,32 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
     override val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
     override val durationMs: StateFlow<Long> = player.durationMs
     override val isPlaying: StateFlow<Boolean> = player.isPlaying
-    override val currentItemId: StateFlow<String?> =
-        combine(player.queue, player.currentMediaItemIndex) { q, i -> q.getOrNull(i)?.id }
-            .stateIn(scope, SharingStarted.Eagerly, player.queue.value.getOrNull(player.currentMediaItemIndex.value)?.id)
-    override val error: StateFlow<PlaybackError?> =
-        player.error.map { it.toPlaybackError() }.stateIn(scope, SharingStarted.Eagerly, player.error.value.toPlaybackError())
+    override val currentItemId: StateFlow<String?> = _currentItemId.asStateFlow()
+    override val error: StateFlow<PlaybackError?> = _error.asStateFlow()
 
     init {
         scope.launch { player.positionMs.collect { if (pendingStart == null) _positionMs.value = it } }
+        scope.launch { player.queue.collect { _currentItemId.value = liveItemId() } }
+        scope.launch { player.currentMediaItemIndex.collect { _currentItemId.value = liveItemId() } }
+        scope.launch { player.error.collect { _error.value = it.toPlaybackError() } }
     }
 
-    override suspend fun awaitReady(): Boolean = player.awaitReady()
+    private fun liveItemId() = player.queue.value.getOrNull(player.currentMediaItemIndex.value)?.id
 
-    override fun setItem(item: PlaybackItem, startMs: Long) {
+    private fun refresh() {
+        _currentItemId.value = liveItemId()
+        _error.value = player.error.value.toPlaybackError()
+    }
+
+    override suspend fun awaitReady(): Boolean = player.awaitReady().also { refresh() }
+
+    override fun setItem(item: PlaybackItem, startMs: Long) = load(item, startMs)
+
+    override fun replaceItem(item: PlaybackItem, startMs: Long) = load(item, startMs)
+
+    private fun load(item: PlaybackItem, startMs: Long) {
         startAt(startMs) { player.setMediaQueue(listOf(item.toLight())) }
-    }
-
-    override fun replaceItem(item: PlaybackItem, startMs: Long) {
-        val index = player.currentMediaItemIndex.value.coerceAtLeast(0)
-        startAt(startMs) { player.replaceMediaItem(index, item.toLight()) }
+        refresh()
     }
 
     /** Runs [change], then seeks to [startMs] as soon as the player accepts a seek that far. */
@@ -87,11 +102,17 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
         _positionMs.value = startMs
         change()
         seekJob = scope.launch {
-            // Each new duration retries; the slow timer covers a stale duration that never re-emits.
-            merge(player.durationMs, ticker()).first { player.durationMs.value > 0 && trySeek(startMs) }
+            // true: landed; false: a new error ended the wait; null: timed out.
+            val landed = withTimeoutOrNull(SEEK_WAIT_MAX_MS) {
+                merge(
+                    player.durationMs.map { true },
+                    ticker(), // a stale duration that never re-emits
+                    player.error.drop(1).filterNotNull().map { false },
+                ).first { ok -> !ok || (player.durationMs.value > 0 && trySeek(startMs)) }
+            }
             pendingStart = null
-            _positionMs.value = player.positionMs.value
-            if (playWhenSeeked) player.play()
+            if (landed == true) _positionMs.value = player.positionMs.value
+            if (playWhenSeeked && landed != false) player.play()
             playWhenSeeked = false
         }
     }
@@ -104,7 +125,7 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
     private fun ticker() = flow {
         while (true) {
             delay(SEEK_RETRY_MS)
-            emit(0L)
+            emit(true)
         }
     }
 
@@ -118,11 +139,7 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
     }
 
     override fun seekTo(ms: Long) {
-        if (pendingStart != null) {
-            startAt(ms) {}
-        } else {
-            player.seekTo(ms)
-        }
+        if (pendingStart != null) startAt(ms) {} else player.seekTo(ms)
     }
 
     override fun release() {
@@ -146,5 +163,6 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
     private companion object {
         const val SEEK_TOLERANCE_MS = 1_000L
         const val SEEK_RETRY_MS = 2_000L
+        const val SEEK_WAIT_MAX_MS = 60_000L
     }
 }

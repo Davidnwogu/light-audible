@@ -7,9 +7,12 @@ import com.davidnwogu.lightaudible.playback.PlaybackItem
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
- * Records calls in [calls] and exposes its state as mutable flows.
- * `setItem`/`replaceItem` load the item (id, position, cleared error) like the real player;
- * `play` starts playback only while [playStarts] is true.
+ * Records calls in [calls] and models the [Playback] contract:
+ * - `setItem`/`replaceItem` load the item (id set, playback stopped) and report the requested start
+ *   as the position; they do not clear [error].
+ * - `play()` only asks to play. Playback starts when the load is prepared: right away while
+ *   [autoPrepare] is true, otherwise when the test calls [prepareSucceeds]. [prepareFails] leaves
+ *   an error that may be identical to the last one, so it does not re-emit.
  */
 class FakePlayback : Playback {
     sealed interface Call {
@@ -29,7 +32,8 @@ class FakePlayback : Playback {
     override val error = MutableStateFlow<PlaybackError?>(null)
 
     var ready = true
-    var playStarts = true
+    var autoPrepare = true
+    private var playRequested = false
     val calls = mutableListOf<Call>()
     val released get() = Call.Release in calls
 
@@ -50,17 +54,32 @@ class FakePlayback : Playback {
 
     private fun load(item: PlaybackItem, startMs: Long) {
         currentItemId.value = item.asin
+        isPlaying.value = false
         positionMs.value = startMs
-        error.value = null
+        playRequested = false
     }
 
     override fun play() {
         calls += Call.Play
-        if (playStarts) isPlaying.value = true
+        playRequested = true
+        if (autoPrepare) prepareSucceeds()
+    }
+
+    /** The load prepared: the error clears and a requested play starts. */
+    fun prepareSucceeds() {
+        error.value = null
+        if (playRequested) isPlaying.value = true
+    }
+
+    /** The load failed again with [e]. */
+    fun prepareFails(e: PlaybackError) {
+        isPlaying.value = false
+        error.value = e
     }
 
     override fun pause() {
         calls += Call.Pause
+        playRequested = false
         isPlaying.value = false
     }
 
