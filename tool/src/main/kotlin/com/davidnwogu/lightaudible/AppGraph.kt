@@ -38,6 +38,10 @@ class AppGraph(dataStore: DataStore<Preferences>, val filesDir: File) {
     val positions = PositionSync(api, store, clock)
     val preparer = Preparer(api)
 
+    init {
+        scope.launch { positions.flush() } // reports queued while offline in an earlier run
+    }
+
     // Presigned URLs: no bearer token, no overall call timeout (books are large).
     private val downloadHttp = OkHttpClient.Builder()
         .callTimeout(0, TimeUnit.MILLISECONDS)

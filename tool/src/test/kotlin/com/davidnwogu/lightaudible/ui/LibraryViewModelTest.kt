@@ -14,6 +14,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -146,5 +147,35 @@ class LibraryViewModelTest {
         assertEquals(fresh, vm.state.value.visible)
         assertEquals("other", vm.state.value.query)
         assertEquals(old + fresh, vm.state.value.books)
+    }
+
+    @Test
+    fun everyShowFlushesPendingPositions() = runTest {
+        store.saveLibraryCache(LibraryCache(old, "e1", now))
+        var flushes = 0
+        val vm = LibraryViewModel(store, api, flushPositions = { flushes++ }) { now }
+        vm.onShow()
+        advanceUntilIdle()
+        assertEquals(1, flushes)
+        vm.onShow()
+        advanceUntilIdle()
+        assertEquals(2, flushes)
+    }
+
+    @Test
+    fun networkComingBackFlushesPendingPositions() = runTest {
+        store.saveLibraryCache(LibraryCache(old, "e1", now))
+        var flushes = 0
+        val connected = MutableStateFlow(true)
+        val vm = LibraryViewModel(store, api, flushPositions = { flushes++ }, connected = connected) { now }
+        vm.onShow()
+        advanceUntilIdle()
+        assertEquals(1, flushes) // the show; already-connected is not a return
+        connected.value = false
+        advanceUntilIdle()
+        assertEquals(1, flushes)
+        connected.value = true
+        advanceUntilIdle()
+        assertEquals(2, flushes)
     }
 }

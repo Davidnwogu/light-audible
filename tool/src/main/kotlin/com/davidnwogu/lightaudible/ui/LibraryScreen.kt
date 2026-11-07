@@ -22,12 +22,19 @@ import com.thelightphone.sdk.ui.LightThemeController
 import com.thelightphone.sdk.ui.LightThemeTokens
 import com.thelightphone.sdk.ui.gridUnitsAsDp
 import com.thelightphone.sdk.ui.lightClickable
+import kotlinx.coroutines.flow.map
 
 class LibraryScreen(activity: SealedLightActivity) : LightScreen<Unit, LibraryViewModel>(activity) {
     private val graph = Graph.get(lightContext.dataStore, lightContext.filesDir)
 
     override val viewModelClass = LibraryViewModel::class.java
-    override fun createViewModel() = LibraryViewModel(graph.store, graph.api, System::currentTimeMillis)
+    override fun createViewModel() = LibraryViewModel(
+        graph.store,
+        graph.api,
+        flushPositions = { graph.positions.flush() },
+        connected = lightContext.connectivity.observeNetworkStatus().map { it.isConnected },
+        nowMs = System::currentTimeMillis,
+    )
 
     @Composable
     override fun Content() {

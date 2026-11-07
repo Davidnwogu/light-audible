@@ -10,6 +10,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 
 class PositionSyncTest {
@@ -115,5 +117,20 @@ class PositionSyncTest {
             Instant.ofEpochMilli(device - 600_000L),
             api.putPositionCalls.single().clientUpdatedAt,
         )
+    }
+
+    @Test
+    fun concurrentFlushesSendEachEntryOnce() = runTest {
+        val s = sync()
+        s.record("A1", 1) // offline: both stay pending
+        device += 1
+        s.record("A2", 2)
+        api.putPositionCalls.clear()
+        api.putPositionResult = { ApiResult.Ok(Unit) }
+        api.putPositionDelayMs = 1_000
+        repeat(3) { launch { s.flush() } }
+        advanceUntilIdle()
+        assertEquals(listOf("A1", "A2"), api.putPositionCalls.map { it.asin })
+        assertEquals(emptyList(), store.pendingPositions())
     }
 }

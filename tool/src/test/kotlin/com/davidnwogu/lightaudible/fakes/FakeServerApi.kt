@@ -6,6 +6,7 @@ import com.davidnwogu.lightaudible.api.LibraryPage
 import com.davidnwogu.lightaudible.api.RemotePosition
 import com.davidnwogu.lightaudible.api.ServerApi
 import java.time.Instant
+import kotlinx.coroutines.delay
 
 /** Scriptable [ServerApi]: set a `*Result` lambda per method; calls are recorded. */
 class FakeServerApi : ServerApi {
@@ -26,6 +27,9 @@ class FakeServerApi : ServerApi {
     val prepareCalls = mutableListOf<String>()
     val positionCalls = mutableListOf<String>()
     val putPositionCalls = mutableListOf<PutPositionCall>()
+
+    /** Virtual time each `putPosition` takes, so concurrent callers interleave. */
+    var putPositionDelayMs = 0L
 
     override suspend fun pair(baseUrl: String, code: String): ApiResult<String> {
         pairCalls += baseUrl to code
@@ -60,6 +64,7 @@ class FakeServerApi : ServerApi {
     override suspend fun putPosition(asin: String, positionMs: Long, clientUpdatedAt: Instant): ApiResult<Unit> {
         val call = PutPositionCall(asin, positionMs, clientUpdatedAt)
         putPositionCalls += call
+        if (putPositionDelayMs > 0) delay(putPositionDelayMs)
         return putPositionResult(call)
     }
 }

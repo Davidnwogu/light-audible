@@ -8,6 +8,8 @@ import com.davidnwogu.lightaudible.store.PendingPosition
 import com.davidnwogu.lightaudible.store.ToolStore
 import java.time.Instant
 import java.time.OffsetDateTime
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Offline-safe position reporting and resume-point resolution. */
 class PositionSync(
@@ -15,20 +17,22 @@ class PositionSync(
     private val store: ToolStore,
     private val clock: ServerClock,
 ) {
+    private val flushing = Mutex()
+
     suspend fun record(asin: String, positionMs: Long) {
         store.putPendingPosition(PendingPosition(asin, positionMs, clock.now().toEpochMilli()))
         flush()
     }
 
-    /** Sends pending entries oldest first; returns true when the queue is empty. */
-    suspend fun flush(): Boolean {
+    /** Sends pending entries oldest first, one flush at a time; returns true when the queue is empty. */
+    suspend fun flush(): Boolean = flushing.withLock {
         for (p in store.pendingPositions().sortedBy { it.atMs }) {
             when (api.putPosition(p.asin, p.positionMs, Instant.ofEpochMilli(p.atMs))) {
                 is ApiResult.Ok, ApiResult.NotFound -> store.removePendingPosition(p)
-                else -> return false
+                else -> return@withLock false
             }
         }
-        return store.pendingPositions().isEmpty()
+        store.pendingPositions().isEmpty()
     }
 
     suspend fun resumePoint(asin: String): Long {

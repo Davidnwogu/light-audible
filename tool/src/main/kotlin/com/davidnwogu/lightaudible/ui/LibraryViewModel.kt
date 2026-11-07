@@ -10,9 +10,14 @@ import com.davidnwogu.lightaudible.store.ToolStore
 import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SimpleLightScreen
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 
 const val BANNER_CONNECTING = "Connecting…"
@@ -39,6 +44,10 @@ fun filterBooks(books: List<LibraryBook>, query: String): List<LibraryBook> {
 class LibraryViewModel(
     private val store: ToolStore,
     private val api: ServerApi,
+    /** Sends queued position reports (PositionSync.flush). */
+    private val flushPositions: suspend () -> Unit = {},
+    /** Whether the device has a network; each return to true flushes queued positions. */
+    private val connected: Flow<Boolean> = emptyFlow(),
     private val nowMs: () -> Long,
 ) : LightViewModel<Unit>() {
     private val _state = MutableStateFlow(LibraryUiState())
@@ -46,11 +55,25 @@ class LibraryViewModel(
 
     private var job: Job? = null
     private var cache: LibraryCache? = null
+    private var networkJob: Job? = null
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) = onShow()
 
-    /** Called whenever the screen becomes current. Refreshes only when the cache is missing or over 24 h old. */
-    fun onShow() = start {
+    /**
+     * Called whenever the screen becomes current. Flushes queued position reports, and refreshes the
+     * library only when the cache is missing or over 24 h old.
+     */
+    fun onShow() {
+        viewModelScope.launch { flushPositions() }
+        if (networkJob?.isActive != true) {
+            networkJob = viewModelScope.launch {
+                connected.distinctUntilChanged().drop(1).filter { it }.collect { flushPositions() }
+            }
+        }
+        start { load() }
+    }
+
+    private suspend fun load() {
         val cached = store.libraryCache()
         cache = cached
         if (cached != null) setBooks(cached.books)
