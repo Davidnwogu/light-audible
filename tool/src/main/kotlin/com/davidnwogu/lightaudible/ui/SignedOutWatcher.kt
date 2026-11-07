@@ -7,7 +7,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import com.davidnwogu.lightaudible.api.AuthState
 
-/** Every non-Setup screen calls this and navigates to Setup when the token is lost. */
+/**
+ * Every non-Setup screen calls this. When the token is lost, [onSignedOut] should be the screen's
+ * `goBack()` so the stack unwinds to the root Setup screen, which then shows the pairing form.
+ */
 @Composable
 fun SignedOutWatcher(auth: AuthState, onSignedOut: () -> Unit) {
     val signedOut by auth.signedOut.collectAsState()

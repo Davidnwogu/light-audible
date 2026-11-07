@@ -105,13 +105,48 @@ class SetupViewModelTest {
 
     @Test
     fun badUrlShowsAddressError() = runTest {
-        val vm = vm()
-        vm.setServerUrl("http://host")
-        vm.setCode("123456")
-        vm.submit()
-        advanceUntilIdle()
-        assertEquals("Can't reach the server. Check the address.", vm.form().error)
+        for (bad in listOf("http://host", "", "not a url")) {
+            val vm = vm()
+            vm.setServerUrl(bad)
+            vm.setCode("123456")
+            vm.submit()
+            advanceUntilIdle()
+            assertEquals("Use your server's https:// address.", vm.form().error)
+        }
         assertTrue(api.pairCalls.isEmpty())
+    }
+
+    @Test
+    fun routingToLibraryFiresOnce() = runTest {
+        store.saveCredentials(Credentials("https://host", "tok"))
+        val vm = vm()
+        assertEquals(SetupRoute.OpenLibrary, vm.route.value)
+        vm.consumeRoute()
+        advanceUntilIdle()
+        assertNull(vm.route.value)
+        assertEquals(SetupUiState.Paired, vm.state.value)
+    }
+
+    @Test
+    fun libraryClosedWhilePairedAsksToExit() = runTest {
+        store.saveCredentials(Credentials("https://host", "tok"))
+        val vm = vm()
+        vm.consumeRoute()
+        vm.onLibraryClosed()
+        advanceUntilIdle()
+        assertEquals(SetupRoute.Exit, vm.route.value)
+    }
+
+    @Test
+    fun libraryClosedSignedOutShowsFormWithStoredUrl() = runTest {
+        store.saveCredentials(Credentials("https://host", "tok"))
+        val vm = vm()
+        vm.consumeRoute()
+        auth.lost()
+        vm.onLibraryClosed()
+        advanceUntilIdle()
+        assertNull(vm.route.value)
+        assertEquals("https://host", vm.form().serverUrl)
     }
 
     @Test

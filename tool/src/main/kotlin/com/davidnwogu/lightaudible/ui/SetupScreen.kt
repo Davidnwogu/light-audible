@@ -35,6 +35,20 @@ class SetupScreen(activity: SealedLightActivity) : LightScreen<Unit, SetupViewMo
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val state by viewModel.state.collectAsState()
+        val route by viewModel.route.collectAsState()
+        LaunchedEffect(route) {
+            when (route) {
+                SetupRoute.OpenLibrary -> {
+                    viewModel.consumeRoute()
+                    navigateTo(::LibraryScreen) { viewModel.onLibraryClosed() }
+                }
+                SetupRoute.Exit -> {
+                    viewModel.consumeRoute()
+                    goBack()
+                }
+                null -> Unit
+            }
+        }
         LightTheme(colors = themeColors) {
             Column(
                 modifier = Modifier
@@ -42,8 +56,7 @@ class SetupScreen(activity: SealedLightActivity) : LightScreen<Unit, SetupViewMo
                     .background(LightThemeTokens.colors.background),
             ) {
                 when (val s = state) {
-                    SetupUiState.Checking -> Unit
-                    SetupUiState.Paired -> LaunchedEffect(Unit) { navigateTo(::LibraryScreen) }
+                    SetupUiState.Checking, SetupUiState.Paired -> Unit
                     is SetupUiState.Form -> FormContent(s)
                 }
             }
