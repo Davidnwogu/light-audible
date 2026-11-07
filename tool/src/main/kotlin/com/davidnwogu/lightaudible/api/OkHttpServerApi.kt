@@ -31,7 +31,13 @@ class OkHttpServerApi(
     private val auth: AuthState,
     callTimeout: Duration = Duration.ofSeconds(30),
 ) : ServerApi {
-    private val http = client.newBuilder().callTimeout(callTimeout).build()
+    /** Every timeout is [callTimeout]: OkHttp's 10 s connect/read defaults would cut off a server waking from sleep. */
+    internal val http = client.newBuilder()
+        .callTimeout(callTimeout)
+        .connectTimeout(callTimeout)
+        .readTimeout(callTimeout)
+        .writeTimeout(callTimeout)
+        .build()
     private val jsonType = "application/json".toMediaType()
 
     override suspend fun pair(baseUrl: String, code: String): ApiResult<String> {

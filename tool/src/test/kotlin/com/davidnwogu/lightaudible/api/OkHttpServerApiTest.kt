@@ -141,4 +141,14 @@ class OkHttpServerApiTest {
         assertEquals(1, offsets.size)
         assertEquals(1_920_196_800_000L - 50, clock.offsetMs)
     }
+
+    @Test
+    fun everyTimeoutIs30Seconds() {
+        // A sleeping server can take most of 30 s to answer; OkHttp's 10 s defaults must not cut it short.
+        val http = OkHttpServerApi(OkHttpClient(), { null }, clock, auth).http
+        assertEquals(30_000, http.callTimeoutMillis)
+        assertEquals(30_000, http.connectTimeoutMillis)
+        assertEquals(30_000, http.readTimeoutMillis)
+        assertEquals(30_000, http.writeTimeoutMillis)
+    }
 }
