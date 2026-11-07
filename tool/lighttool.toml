@@ -1,0 +1,11 @@
+[tool]
+id = "com.davidnwogu.lightaudible"
+label = "Audiobooks"
+versionCode = 1
+versionName = "0.1.0"
+permissions = ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]
+capabilities = ["detached-audio"]
+orientation = "portrait"
+# Development uses the emulator (build with -DlightSdk.allowAltServerPackage=true).
+# Switch to "com.lightos" for a real Light Phone.
+serverPackage = "com.thelightphone.sdk.emulator"
