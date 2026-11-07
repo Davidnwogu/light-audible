@@ -49,6 +49,13 @@ class BookScreen(activity: SealedLightActivity, private val book: LibraryBook) :
                 val runtime = formatRuntime(book.runtimeMs)
                 if (runtime.isNotEmpty()) LightText(runtime, variant = LightTextVariant.Detail, modifier = pad)
                 state.statusLine?.let { LightText(it, variant = LightTextVariant.Detail, modifier = pad) }
+                if (state.statusLine == STATUS_FAILED) {
+                    LightText(
+                        "Try again",
+                        variant = LightTextVariant.Copy,
+                        modifier = pad.lightClickable { viewModel.retry() },
+                    )
+                }
                 LightText(
                     "Play",
                     variant = LightTextVariant.Copy,
@@ -56,12 +63,19 @@ class BookScreen(activity: SealedLightActivity, private val book: LibraryBook) :
                 )
                 val progress = state.downloadProgress
                 when {
-                    progress != null -> LightText(
-                        "Downloading ${(progress * 100).toInt()}%",
-                        variant = LightTextVariant.Copy,
-                        modifier = pad,
-                        lighten = true,
-                    )
+                    progress != null -> {
+                        LightText(
+                            "Downloading ${(progress * 100).toInt()}%",
+                            variant = LightTextVariant.Copy,
+                            modifier = pad,
+                            lighten = true,
+                        )
+                        LightText(
+                            "Cancel download",
+                            variant = LightTextVariant.Copy,
+                            modifier = pad.lightClickable { viewModel.cancelDownload() },
+                        )
+                    }
                     state.downloaded -> LightText(
                         "Remove download",
                         variant = LightTextVariant.Copy,

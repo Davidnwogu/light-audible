@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -32,8 +33,9 @@ import okhttp3.OkHttpClient
 class BookViewModelTest {
     private val api = FakeServerApi()
     private val dir = kotlin.io.path.createTempDirectory("bk").toFile()
+    private val net = ScriptedInterceptor()
     private val downloads = Downloads(
-        dir, OkHttpClient.Builder().addInterceptor(ScriptedInterceptor()).build(),
+        dir, OkHttpClient.Builder().addInterceptor(net).build(),
         Preparer(api), CoroutineScope(Dispatchers.Unconfined), Dispatchers.Unconfined,
     )
     private val book = LibraryBook("B1", "Title", listOf("A"), listOf("N"), 1000L, true)
@@ -82,5 +84,43 @@ class BookViewModelTest {
     @Test
     fun notDownloaded() = runTest {
         assertFalse(shown().state.value.downloaded)
+    }
+
+    @Test
+    fun retryPreparesAgainAndRereadsStatus() = runTest {
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.Failed, error = "e")) }
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Preparing)) }
+        val vm = shown()
+        vm.retry()
+        advanceUntilIdle()
+        assertEquals(listOf("B1"), api.prepareCalls)
+        assertEquals("Preparing…", vm.state.value.statusLine)
+    }
+
+    @Test
+    fun downloadFailureIsShown() = runTest {
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.Ready, chapters = chapters)) }
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Ready, "https://cdn/x", "2030-01-01T00:00:00Z")) }
+        net.enqueueFailure(java.io.IOException("x"))
+        val vm = shown()
+        vm.download()
+        advanceUntilIdle()
+        assertEquals("Download failed", vm.state.value.statusLine)
+    }
+
+    @Test
+    fun cancelDownloadClearsProgress() = runTest {
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Preparing)) }
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.Preparing)) }
+        val d = Downloads(dir, OkHttpClient(), Preparer(api), this, StandardTestDispatcher(testScheduler))
+        val vm = BookViewModel(book, api, d)
+        vm.onShow()
+        advanceUntilIdle()
+        vm.download()
+        advanceTimeBy(100)
+        assertEquals(0f, vm.state.value.downloadProgress)
+        vm.cancelDownload()
+        advanceTimeBy(20_000)
+        assertNull(vm.state.value.downloadProgress)
     }
 }
