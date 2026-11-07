@@ -6,7 +6,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.BufferedSource
+import okio.ForwardingSource
+import okio.buffer
 import okio.Buffer
 
 class RecordedRequest(val method: String, val url: String, val headers: Map<String, String>, val body: String)
@@ -16,6 +20,7 @@ class ScriptedInterceptor : Interceptor {
     private sealed interface Action {
         class Reply(val status: Int, val headers: Map<String, String>, val body: String, val sentAt: Long, val receivedAt: Long) : Action
         class Fail(val error: IOException) : Action
+        class Partial(val bytes: ByteArray, val error: IOException) : Action
     }
 
     private val queue = ArrayDeque<Action>()
@@ -35,6 +40,11 @@ class ScriptedInterceptor : Interceptor {
         queue.addLast(Action.Fail(error))
     }
 
+    /** A 200 response whose body yields [bytes] and then throws [error]. */
+    fun enqueuePartialThenFail(bytes: ByteArray, error: IOException) {
+        queue.addLast(Action.Partial(bytes, error))
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         requests += RecordedRequest(
@@ -47,6 +57,20 @@ class ScriptedInterceptor : Interceptor {
         return when (action) {
             is Action.Fail -> throw action.error
             is Action.Reply -> build(request, action)
+            is Action.Partial -> Response.Builder()
+                .request(request).protocol(Protocol.HTTP_1_1).code(200).message("scripted")
+                .body(object : ResponseBody() {
+                    override fun contentType() = null
+                    override fun contentLength() = action.bytes.size + 1000L
+                    override fun source(): BufferedSource = object : ForwardingSource(Buffer().write(action.bytes)) {
+                        override fun read(sink: Buffer, byteCount: Long): Long {
+                            val n = super.read(sink, byteCount)
+                            if (n == -1L) throw action.error
+                            return n
+                        }
+                    }.buffer()
+                })
+                .build()
         }
     }
 

@@ -8,7 +8,10 @@ import com.davidnwogu.lightaudible.api.ServerApi
 import com.davidnwogu.lightaudible.api.ServerClock
 import com.davidnwogu.lightaudible.store.DataStoreToolStore
 import com.davidnwogu.lightaudible.store.ToolStore
+import com.davidnwogu.lightaudible.sync.Downloads
+import com.davidnwogu.lightaudible.sync.Preparer
 import com.davidnwogu.lightaudible.sync.PositionSync
+import java.util.concurrent.TimeUnit
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +22,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 
 /** Process-wide object graph. Later tasks add preparer, downloads and playback. */
-class AppGraph(dataStore: DataStore<Preferences>, @Suppress("UNUSED_PARAMETER") filesDir: File) {
+class AppGraph(dataStore: DataStore<Preferences>, val filesDir: File) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val store: ToolStore = DataStoreToolStore(dataStore)
     val auth = AuthState(store)
@@ -32,6 +35,14 @@ class AppGraph(dataStore: DataStore<Preferences>, @Suppress("UNUSED_PARAMETER") 
     )
     val api: ServerApi = OkHttpServerApi(OkHttpClient(), store::credentials, clock, auth)
     val positions = PositionSync(api, store, clock)
+    val preparer = Preparer(api)
+
+    // Presigned URLs: no bearer token, no overall call timeout (books are large).
+    private val downloadHttp = OkHttpClient.Builder()
+        .callTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+    val downloads = Downloads(filesDir, downloadHttp, preparer, scope)
 }
 
 object Graph {
