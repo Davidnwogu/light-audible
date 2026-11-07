@@ -41,7 +41,7 @@ light-audible/
 └── tool/     Light SDK tool (Kotlin, Compose): build.gradle.kts, lighttool.toml, src/main/**
 ```
 
-Light's builder accepts a `--tool-path`, so the tool does not have to be a fork of `light-sdk`. For local builds, the owner's existing `light-sdk` checkout compiles our `tool/` folder in place of its own `:tool` module. The exact mechanism (symlink or Gradle `projectDir` override) is decided in the implementation plan.
+Light's builder accepts a `--tool-path`, so the tool does not have to be a fork of `light-sdk`. For local builds, a dedicated git worktree of the owner's `light-sdk` checkout, detached at the release tag **`v0.2.3`**, compiles our `tool/` folder in place of its own `:tool` module through a Gradle `projectDir` override in that worktree's `settings.gradle.kts`. The owner's main `light-sdk` checkout is not touched. The SDK is pinned to the tag, not to `main`: since 2026-11-04, every SDK merge to `main` cuts a tagged release, so a tag is the unit to pin and upgrade deliberately.
 
 ### 2.1 Infrastructure
 
@@ -91,31 +91,52 @@ All `/api/*` routes except `/api/pair` require `Authorization: Bearer <token>`. 
 | `POST /api/pair` `{code}` | Returns `{token}`. A code is invalid after 5 failed tries or 10 minutes. |
 | `GET /api/library` | Book list with chapters omitted. Supports `If-None-Match` (ETag). |
 | `POST /api/library/refresh` | Re-sync from Audible, then return the list. |
-| `POST /api/books/{asin}/prepare` | Starts conversion if needed. Returns a `BookState`. |
-| `GET /api/books/{asin}` | Returns a `BookState` without starting work. |
+| `POST /api/books/{asin}/prepare` | Starts conversion if needed (and re-queues a `failed` one). Returns a `BookState`. This is the **only** route that returns a stream URL. |
+| `GET /api/books/{asin}` | Returns a `BookState` with `chapters`, without starting work. Never returns a `url`. |
 | `GET /api/books/{asin}/position` | `{position_ms, updated_at}` after conflict resolution. |
-| `PUT /api/books/{asin}/position` `{position_ms, client_updated_at}` | Save a position. |
+| `PUT /api/books/{asin}/position` `{position_ms, client_updated_at}` | Save a position. Returns `204`. |
 | `GET /api/health` | Liveness, no auth. |
 
-`BookState` = `{status: "not_ready"|"preparing"|"ready"|"failed"|"unplayable", url?, url_expires_at?, chapters?, error?}`. `url` is a presigned bucket URL valid for 6 hours. Returning a URL updates `last_played_at`.
+`BookState` = `{status: "not_ready"|"preparing"|"ready"|"failed"|"unplayable", url?, url_expires_at?, chapters?, error?}`.
+- `url` and `url_expires_at` appear only in a `prepare` response whose status is `ready`. `url` is a presigned bucket URL valid for 6 hours. Returning a URL updates `last_played_at`.
+- `chapters` (`[{idx, title, start_ms, length_ms}]`) appear only in `GET /api/books/{asin}`. They are best-effort: an Audible failure returns `[]`.
+- `error` appears for `failed` (conversion error) and `unplayable` (reason).
+
+So the phone's play flow is: `prepare` → while `preparing`, poll `GET /api/books/{asin}` → once it says `ready`, call `prepare` again to get the URL.
+
+**Verified against the live deployment (2026-11-06):**
+- Converted books are stored with the `moov` index at the front (faststart), so the presigned URL streams with HTTP range requests and seeks quickly anywhere in the book.
+- `GET /api/library` items are `{asin, title, authors: [..], narrators: [..], runtime_ms, playable}`, newest purchase first. The `ETag` is a quoted timestamp; a matching `If-None-Match` returns `304` with no body.
+- Position timestamps are UTC ISO-8601 (`…+00:00`). `client_updated_at` must carry an offset (`Z` is fine) or the request is rejected. With no saved position, `GET …/position` returns `{position_ms: 0, updated_at: "1970-01-01T00:00:00+00:00"}`.
+- `PUT …/position` keeps whichever write has the latest `client_updated_at`; an older write is silently ignored (still `204`).
+
+**Error bodies (issue #5 open):** `401 {"error":"unauthorized"}`, `409 {"error":"needs_sign_in"}`, `400 {"error":"invalid_code"}` (pair), `404 {"error":"not_found"}` (unknown book), `502 {"error":"audible_error"}` (library refresh) are stable. Validation failures (`422 {"detail": …}`), unknown paths (`404 {"detail": …}`) and unhandled errors (plain-text `500`) are not uniform yet. The tool therefore classifies every failure by **HTTP status first** and reads the `error` field only to tell `invalid_code` and `needs_sign_in` apart; it never requires a JSON body on an error. It does not wait for #5.
+
+**Clock skew (issue #3 open):** if the phone's clock runs ahead, the server stores a future `updated_at` and ignores later correct writes until real time catches up; a clock running behind makes the phone's writes lose to older ones. The tool works around both instead of waiting: it records the server's clock offset from the `Date` header of every successful response and stamps `client_updated_at` with `device now + offset`. Server-side clamping (#3) remains a separate defense.
 
 Setup routes (`/setup/*`) use HTTP Basic auth: start login, finish login (pasted redirect URL), create pairing code, toggle position sync, and view status.
 
 ### 2.5 Light tool
 
-**`lighttool.toml`:** `permissions = ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]`, `capabilities = ["detached-audio"]`, `orientation = "portrait"`.
+**SDK version:** Light SDK `v0.2.3` (`sdkVersion=0.2.3`, AGP 8.12.3, Kotlin 2.3.20, media3 1.10.1, minSdk 34, JVM 17).
 
-**Libraries (all on Light's allow-list):** OkHttp, kotlinx-serialization, kotlinx-coroutines, androidx.datastore, androidx.media3 (via the SDK).
+**`lighttool.toml`:** `id = "com.davidnwogu.lightaudible"`, `label = "Audiobooks"`, `permissions = ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]`, `capabilities = ["detached-audio"]`, `orientation = "portrait"`. `serverPackage` is `com.thelightphone.sdk.emulator` while developing against the LightOS emulator (built with `-DlightSdk.allowAltServerPackage=true`) and `com.lightos` for a real phone.
+
+**Libraries (all on Light's v0.2.3 allow-list):** OkHttp, kotlinx-serialization, kotlinx-coroutines, androidx.datastore, androidx.media3 (via the SDK). The tool may not import `android.content.Context`, `android.app.*`, or use reflection; it reaches Android only through `LightScreen`/`SealedLightActivity` APIs (`dataStore`, `filesDir`, `DefaultLightAudio`, `LightConnectivity`).
+
+**Testability seam:** `LightAudioPlayer` is a final class with an internal constructor, so view models depend on a small `Playback` interface implemented by an adapter around `LightAudioPlayer`, and JVM tests use a fake. The same applies to the HTTP client (`ServerApi` interface) and storage (`ToolStore` interface).
 
 **Screens (each `LightScreen` + `LightViewModel`):**
 1. **Setup**: server URL + 6-digit code, then store the token. This screen is the `@InitialScreen` router: it goes to Library when a token exists.
-2. **Library**: text list with a search field at the top (filters cached list by title/author, case-insensitive, on device). Pull to refresh. Unplayable books are greyed out.
+2. **Library**: text list with a search field at the top (filters cached list by title/author, case-insensitive, on device). A **Refresh** action at the top (the Light UI kit has no pull-to-refresh). Unplayable books are greyed out.
 3. **Book**: title, author, narrator, length, chapter list, **Play**, **Download** / **Remove download**.
 4. **Player**: title, current chapter, position/duration, play/pause, −30s/+30s, chapter list. Shows "Preparing…", "Connecting…", or "Reconnecting…" states.
 
 **Local storage:** DataStore holds server URL, token, the library JSON cache, and an outgoing position queue. Downloads go to the tool's private files dir, named `<asin>.m4b`.
 
-**Playback:** a detached `LightAudioPlayer` with `LightMediaCache("stream", 512 MB)`. Each item has `id = asin`. A downloaded book uses `FileSource`; otherwise it uses `UrlSource(presignedUrl)`.
+**Playback:** a detached `LightAudioPlayer` with `LightPlayerSpec(usage = LightAudioUsage.Speech, playback = Detached, cache = LightMediaCache("stream", 512 MB))`, one book per queue. Each item has `id = asin`, so cached bytes survive URL rotation. A downloaded book uses `FileSource`; otherwise it uses `UrlSource(presignedUrl)`. On reconnect the tool calls `awaitReady()` and reuses a live queue instead of replacing it. The tool keeps the URL's `url_expires_at` and asks `prepare` for a new URL before reusing one that expires within 10 minutes.
+
+**Who owns the player:** only one detached handle may exist per process, and position reports must keep flowing after the Player screen closes. So a process-wide `PlaybackSession` (not the Player view model) holds the handle, reports positions (on pause and every 60 s while playing), and keeps the handle while audio plays. When playback is paused and no Player screen is attached, it reports the position and releases the handle (without `stop()`), which lets the SDK's 15-minute idle rule stop the service. The Player view model only attaches to and detaches from the session.
 
 **Accepted risk:** the device token is stored unencrypted in the tool's private DataStore. v1 does not use the Android Keystore, because it is unconfirmed whether Light's lint rules allow it. The token only grants access to this one server and can be revoked by re-pairing.
 
@@ -133,13 +154,13 @@ Setup routes (`/setup/*`) use HTTP Basic auth: start login, finish login (pasted
      4. Upload the result as `books/<asin>.m4b`.
      5. Mark the row `ready` and delete the temp files.
 
-     Meanwhile the phone shows "Preparing…" and polls `GET /api/books/{asin}` every 5 seconds.
-5. **Playback:** start at the resolved position (step 6). If a URL expires (403), fetch a fresh `BookState` and call `replaceMediaItem` with the same `id`, then seek to the saved position.
+     Meanwhile the phone shows "Preparing…" and polls `GET /api/books/{asin}` every 5 seconds. When the poll says `ready`, the phone calls `prepare` once more to get the URL.
+5. **Playback:** start at the resolved position (step 6). If a URL expires (a `Source` playback error on a streamed item), call `prepare` for a fresh URL and `replaceMediaItem` with the same `id`, then seek to the position saved before the error.
 6. **Position:**
    - **When the phone reports:** on pause, every 60 seconds while playing, and when the tool closes. Reports go through the outgoing queue so offline updates are sent later.
    - **On PUT:** the server saves its copy, then writes to Audible when sync is enabled.
    - **On GET:** the server reads Audible's position and returns whichever of Audible's and its own copy is newer.
-7. **Download:** phone takes the presigned URL from `prepare`, downloads it with OkHttp to `<asin>.m4b.part`, then renames it to `<asin>.m4b` on success.
+7. **Download:** phone takes the presigned URL from `prepare` (status `ready`), downloads it with OkHttp to `<asin>.m4b.part`, then renames it to `<asin>.m4b` on success.
 
 ## 4. Error handling
 
@@ -151,7 +172,7 @@ Setup routes (`/setup/*`) use HTTP Basic auth: start login, finish login (pasted
 | Conversion error (network) | Retried automatically up to 2 more times (3 attempts total). The final failure becomes `failed` with `error`. The phone shows "Couldn't prepare this book" with **Try again**, which re-queues it. |
 | License refused / no AAXC available (podcasts, newer protected formats) | Book marked `playable = false` with a reason. It is greyed out in the library and not retried automatically. |
 | Server restarts mid-job | On startup, `preparing` rows with `started_at` older than 30 minutes go back in the queue, and the temp dir is wiped. |
-| Stream error: expired URL | Refresh the URL and resume at the same position. |
+| Stream error: expired URL | Call `prepare` for a fresh URL and resume at the same position. The phone cannot see the HTTP status through the player, so the first `Source` error on a streamed item always tries one URL refresh before backing off. |
 | Stream error: other source error | "Reconnecting…", retry with backoff (2s, 4s, 8s … max 60s). Cached bytes keep playing in the meantime. |
 | Audible position write fails | Server copy is still saved. After 5 consecutive failures, `position_sync_enabled = false`, and the setup page shows the reason with a re-enable toggle. |
 | Phone offline | Cached library is shown, downloaded books play, and positions are queued. |
@@ -196,5 +217,5 @@ Sign in and pair → search and play an unconverted book (under ~2 min) → repl
 - **Unofficial Audible API:** `audible` uses Audible's private API, which can change without notice. Position sync has a defined fallback. Licensing/download failures would block new conversions but not already converted books.
 - **Terms of service:** downloading and decrypting purchased books for personal use is a grey area under Audible's terms. Accepted for personal use. This is why the tool is not submitted to Light's library.
 - **Railway pricing:** plans and limits change, so recheck https://railway.com/pricing before the trial ends. The database and storage are kept portable for this reason.
-- **Light SDK churn:** the SDK is early and changing quickly. Pin an SDK version and update deliberately.
+- **Light SDK churn:** the SDK is early and changing quickly, and now releases on every merge to `main`. The tool is pinned to tag `v0.2.3`; upgrading means moving the build worktree to a newer tag and rerunning the tests.
 - **Request time limits:** Railway reportedly caps HTTP requests at about 15 minutes (unverified). This doesn't matter because conversion runs in the background and the phone polls.
