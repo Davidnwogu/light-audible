@@ -46,6 +46,8 @@ class PlaybackSession(
 
     /** While the recovery loop owns the item; position updates are ignored meanwhile. */
     private var recovering = false
+    /** The user paused during recovery: the current error is theirs to retry (by play or open). */
+    private var errorAcked = false
     private val urls = HashMap<String, Pair<String, Long>>() // asin -> (url, expiresAtMs)
 
     private var loading: Any? = null // token of the running load
@@ -65,6 +67,7 @@ class PlaybackSession(
         val switching = this.book?.asin != book.asin
         this.book = book
         this.factory = factory
+        errorAcked = false
         stopRecovery()
         _state.update {
             if (!switching) it.copy(phase = Phase.Preparing)
@@ -83,13 +86,18 @@ class PlaybackSession(
 
     fun togglePlay() {
         val p = handle ?: return
+        val e = p.error.value
         if (recovering) {
             stopRecovery()
+            errorAcked = true
             _state.update { it.copy(phase = Phase.Ready) }
             pause(p)
             item?.let { record(it, lastPositionMs) }
         } else if (p.isPlaying.value || playPending) {
             pause(p)
+        } else if (e != null && item != null && !terminal()) {
+            errorAcked = false
+            onError(e) // reload from a fresh source rather than replaying the failed one
         } else {
             requestPlay(p)
         }
@@ -204,7 +212,7 @@ class PlaybackSession(
 
     /** Starts the recovery loop for a streamed item's source error; anything else fails. */
     private fun onError(e: PlaybackError) {
-        if (recovering) return
+        if (recovering || errorAcked) return
         val asin = item ?: return
         val b = book?.takeIf { it.asin == asin } ?: return
         val p = handle ?: return
@@ -286,7 +294,7 @@ class PlaybackSession(
             val p = handle ?: return@launch
             if (p.isPlaying.value || recovering) return@launch
             val e = p.error.value
-            if (e != null && !terminal()) onError(e) else maybeRelease(recordOnRelease, waitForPlay = false)
+            if (e != null && !errorAcked && !terminal()) onError(e) else maybeRelease(recordOnRelease, waitForPlay = false)
         }
     }
 
@@ -297,7 +305,7 @@ class PlaybackSession(
         val p = handle ?: return false
         if (attached || p.isPlaying.value || recovering || loading != null) return false
         if (waitForPlay && playPending) return false
-        if (p.error.value != null && item != null && !terminal()) return false // recovery comes first
+        if (p.error.value != null && item != null && !errorAcked && !terminal()) return false // recovery comes first
         release(record)
         return true
     }
@@ -313,12 +321,14 @@ class PlaybackSession(
         wasPlaying = false
         playPending = false
         recovering = false
+        errorAcked = false
         p.release()
         _state.update { it.copy(isPlaying = false, phase = if (it.phase is Phase.Ready) Phase.Idle else it.phase) }
     }
 
     private fun requestPlay(p: Playback) {
         playPending = true // before play(): isPlaying may turn true inside it
+        errorAcked = false
         p.play()
     }
 

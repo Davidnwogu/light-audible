@@ -377,6 +377,70 @@ class PlaybackSessionTest {
     }
 
     @Test
+    fun userPauseDuringRecoveryWinsAndDetachReleases() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 40_000
+        runCurrent()
+        p.autoPrepare = false
+        p.prepareFails(sourceError)
+        runCurrent()
+        assertEquals(Phase.Reconnecting, s.state.value.phase)
+        val replaces = p.replaces().size
+        val plays = p.calls.count { it == Call.Play }
+        s.togglePlay() // user pauses while reconnecting
+        runCurrent()
+        s.detach()
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(replaces, p.replaces().size)
+        assertEquals(plays, p.calls.count { it == Call.Play })
+        assertTrue(p.released)
+        assertEquals("A" to 40_000L, records().last())
+    }
+
+    @Test
+    fun userPlayAfterPausedRecoveryReloadsFreshSource() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 40_000
+        runCurrent()
+        p.autoPrepare = false
+        p.prepareFails(sourceError)
+        runCurrent()
+        s.togglePlay()
+        runCurrent()
+        val prepares = api.prepareCalls.size
+        s.togglePlay() // play again
+        runCurrent()
+        assertEquals(prepares + 1, api.prepareCalls.size)
+        assertEquals(40_000, p.replaces().last().startMs)
+        assertEquals(Phase.Reconnecting, s.state.value.phase)
+    }
+
+    @Test
+    fun seekTimeoutReportedAsSourceErrorReloadsAtSavedPosition() = runTest {
+        // LightPlayback reports SEEK_TIMEOUT (keeping the requested start as the position) when a load
+        // never accepts its start; the session must reload at that position rather than play from 0.
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 90_000
+        runCurrent()
+        p.isPlaying.value = false
+        p.error.value = PlaybackError(isSource = true, diagnostic = SEEK_TIMEOUT)
+        runCurrent()
+        assertEquals(90_000, p.replaces().single().startMs)
+        assertEquals("A" to 90_000L, records().last())
+        assertTrue(records().none { it.second == 0L })
+    }
+
+    @Test
     fun nonSourceErrorFailsWithoutRetry() = runTest {
         val s = session()
         s.open(bookA, factory)

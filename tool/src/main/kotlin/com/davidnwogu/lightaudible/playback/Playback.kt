@@ -13,6 +13,9 @@ data class PlaybackItem(val asin: String, val title: String, val author: String?
 /** [isSource] is true for network or file I/O failures, the only kind a fresh URL can fix. */
 data class PlaybackError(val isSource: Boolean, val diagnostic: String)
 
+/** Reported as a source error when a loaded item never accepted its start position. */
+const val SEEK_TIMEOUT = "SEEK_TIMEOUT"
+
 /**
  * The one detached audio player handle, behind an interface so JVM tests can fake it.
  * Every call must be made on the main thread.

@@ -51,7 +51,7 @@ class LightPlaybackFactory(private val audio: LightAudio) : PlaybackFactory {
  * - `LightAudioPlayer.seekTo` clamps to the resolved duration, which is 0 right after loading, so the
  *   start position is applied once the item reports a duration. Until then [positionMs] reads the
  *   requested start and `play()` is held back. The wait ends on a new player error (the session
- *   recovers) or after [SEEK_WAIT_MAX_MS], when a held `play()` goes through anyway.
+ *   recovers) or after [SEEK_WAIT_MAX_MS], when it reports a [SEEK_TIMEOUT] source error instead of playing.
  * - [currentItemId] and [error] are refreshed straight from the player in [awaitReady] and after
  *   each load, so they never lag behind a collector.
  */
@@ -110,9 +110,16 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
                     player.error.drop(1).filterNotNull().map { false },
                 ).first { ok -> !ok || (player.durationMs.value > 0 && trySeek(startMs)) }
             }
+            if (landed == null) {
+                // Never seeked: stay paused and keep reporting the start (pendingStart stays set), and
+                // report a source error so the session reloads at its saved position.
+                playWhenSeeked = false
+                _error.value = PlaybackError(isSource = true, diagnostic = SEEK_TIMEOUT)
+                return@launch
+            }
             pendingStart = null
-            if (landed == true) _positionMs.value = player.positionMs.value
-            if (playWhenSeeked && landed != false) player.play()
+            if (landed) _positionMs.value = player.positionMs.value
+            if (playWhenSeeked && landed) player.play()
             playWhenSeeked = false
         }
     }
