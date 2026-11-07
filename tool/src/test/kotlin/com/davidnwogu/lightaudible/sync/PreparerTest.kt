@@ -73,7 +73,31 @@ class PreparerTest {
         val out = preparer.readyUrl("A") { waits += it }
         assertTrue(out is PrepareOutcome.Ready)
         assertEquals(listOf(PrepareWait.Connecting, PrepareWait.Connecting), waits)
-        assertEquals(10_000, currentTime)
+        assertEquals(15_000, currentTime) // backs off: 5 s, then 10 s
+    }
+
+    @Test
+    fun networkFailuresBackOffAndAnyResponseResetsIt() = runTest {
+        val prepareAt = mutableListOf<Long>()
+        api.prepareResult = {
+            prepareAt += testScheduler.currentTime
+            when (prepareAt.size) {
+                in 1..7 -> ApiResult.Failed(null)
+                8 -> ApiResult.Ok(st(BookStatus.Preparing))
+                else -> ApiResult.Ok(readyState)
+            }
+        }
+        val pollAt = mutableListOf<Long>()
+        val polls = ArrayDeque(listOf<ApiResult<BookState>>(
+            ApiResult.Ok(st(BookStatus.NotReady)), ApiResult.Failed(503), ApiResult.Ok(st(BookStatus.Ready)),
+        ))
+        api.bookResult = { pollAt += testScheduler.currentTime; polls.removeFirst() }
+        val out = preparer.readyUrl("A") {}
+        assertTrue(out is PrepareOutcome.Ready)
+        // Waits of 5, 10, 20, 40, 60, 60, 60 s between failed prepares.
+        assertEquals(listOf(0L, 5_000, 15_000, 35_000, 75_000, 135_000, 195_000, 255_000, 270_000), prepareAt)
+        // Polling while preparing stays every 5 s; the earlier responses reset the backoff to 5 s.
+        assertEquals(listOf(260_000L, 265_000, 270_000), pollAt)
     }
 
     @Test

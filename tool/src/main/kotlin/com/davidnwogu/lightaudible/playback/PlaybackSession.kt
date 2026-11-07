@@ -48,6 +48,8 @@ class PlaybackSession(
     private var recovering = false
     /** The user paused during recovery: the current error is theirs to retry (by play or open). */
     private var errorAcked = false
+    /** The running recovery has lasted [DETACHED_RECOVERY_MAX_MS]: it gives up whenever no screen is attached. */
+    private var recoveryOverdue = false
     private val urls = HashMap<String, Pair<String, Long>>() // asin -> (url, expiresAtMs)
 
     private var loading: Any? = null // token of the running load
@@ -56,6 +58,7 @@ class PlaybackSession(
     private var recoverJob: Job? = null
     private var tickJob: Job? = null
     private var checkJob: Job? = null
+    private var giveUpJob: Job? = null
 
     /**
      * The Book screen's Play: always plays [book], reusing the live detached item when it is the same
@@ -81,6 +84,7 @@ class PlaybackSession(
     override fun detach() {
         attached = false
         val p = handle ?: return run { factory = null }
+        if (recovering && recoveryOverdue) return giveUp()
         if (!p.isPlaying.value && !maybeRelease()) scheduleCheck(if (playPending) PLAY_START_GRACE_MS else GRACE_MS)
     }
 
@@ -221,6 +225,13 @@ class PlaybackSession(
         recovering = true
         checkJob?.cancel()
         _state.update { it.copy(phase = Phase.Reconnecting) }
+        recoveryOverdue = false
+        giveUpJob?.cancel()
+        giveUpJob = scope.launch {
+            delay(DETACHED_RECOVERY_MAX_MS)
+            recoveryOverdue = true
+            if (!attached) giveUp()
+        }
         // Owns the item until it plays (onPlaying cancels this). Polls the error rather than waiting
         // for a new emission, so an identical repeated error is never conflated away.
         recoverJob = scope.launch {
@@ -246,6 +257,18 @@ class PlaybackSession(
             if (p.error.value != null && !p.isPlaying.value) return true
         }
         return false
+    }
+
+    /**
+     * Ends a recovery that outlasted [DETACHED_RECOVERY_MAX_MS] with no screen attached: records the last
+     * known position, fails, and releases the handle paused, so a network that returns later never starts audio.
+     */
+    private fun giveUp() {
+        if (!recovering) return
+        val p = handle ?: return
+        stopRecovery()
+        pause(p)
+        fail(PLAY_FAILED, releaseNow = true) // release() records the position
     }
 
     private fun endRecovery() {
@@ -314,7 +337,7 @@ class PlaybackSession(
     private fun release(record: Boolean = true) {
         val p = handle ?: return
         if (record) item?.let { record(it, lastPositionMs) }
-        listOf(watchJob, tickJob, recoverJob, openJob, checkJob).forEach { it?.cancel() }
+        listOf(watchJob, tickJob, recoverJob, openJob, checkJob, giveUpJob).forEach { it?.cancel() }
         loading = null
         handle = null
         factory = null
@@ -354,5 +377,6 @@ class PlaybackSession(
         const val PLAY_START_GRACE_MS = 30_000L
         const val ATTEMPT_CHECK_MS = 1_000L
         const val ATTEMPT_MAX_MS = 30_000L
+        const val DETACHED_RECOVERY_MAX_MS = 15 * 60_000L
     }
 }

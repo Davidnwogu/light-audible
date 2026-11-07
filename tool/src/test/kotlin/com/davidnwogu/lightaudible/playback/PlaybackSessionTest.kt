@@ -501,6 +501,75 @@ class PlaybackSessionTest {
         assertTrue(factory.last.released)
     }
 
+    /** Plays A at [atMs], then fails with a source error while the server is unreachable. */
+    private fun TestScope.offlineSourceError(s: PlaybackSession, atMs: Long, detach: Boolean): FakePlayback {
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = atMs
+        runCurrent()
+        if (detach) s.detach()
+        api.prepareResult = { ApiResult.Failed(null) } // offline
+        p.autoPrepare = false
+        p.prepareFails(sourceError)
+        runCurrent()
+        assertEquals(Phase.Reconnecting, s.state.value.phase)
+        return p
+    }
+
+    @Test
+    fun detachedOfflineRecoveryGivesUpAfter15MinutesWithoutPlaying() = runTest {
+        val s = session()
+        val p = offlineSourceError(s, 3_600_000, detach = true)
+        advanceTimeBy(15 * 60_000L - 1)
+        runCurrent()
+        assertFalse(p.released)
+        assertEquals(Phase.Reconnecting, s.state.value.phase)
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(p.released)
+        assertEquals(Phase.Failed("Couldn't play this book"), s.state.value.phase)
+        assertEquals("A" to 3_600_000L, records().last())
+        assertTrue(p.replaces().isEmpty()) // never got a URL to reload
+        assertEquals(Call.Release, p.calls.last())
+        assertFalse(s.state.value.isPlaying)
+    }
+
+    @Test
+    fun networkReturningAfterGivingUpDoesNotStartAudio() = runTest {
+        val s = session()
+        val p = offlineSourceError(s, 3_600_000, detach = true)
+        advanceTimeBy(15 * 60_000L)
+        runCurrent()
+        assertTrue(p.released)
+        val prepares = api.prepareCalls.size
+        val calls = p.calls.size
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Ready, url(it, 99), "2030-01-01T06:00:00Z")) }
+        p.prepareSucceeds() // the network is back
+        advanceTimeBy(60 * 60_000L)
+        runCurrent()
+        assertEquals(prepares, api.prepareCalls.size)
+        assertEquals(calls, p.calls.size)
+        assertFalse(p.isPlaying.value)
+        assertFalse(s.state.value.isPlaying)
+        assertEquals(1, factory.openCount)
+    }
+
+    @Test
+    fun attachedOfflineRecoveryContinuesPast15MinutesUntilDetached() = runTest {
+        val s = session()
+        val p = offlineSourceError(s, 50_000, detach = false)
+        advanceTimeBy(20 * 60_000L)
+        runCurrent()
+        assertFalse(p.released)
+        assertEquals(Phase.Reconnecting, s.state.value.phase)
+        s.detach() // already past 15 minutes: gives up now
+        runCurrent()
+        assertTrue(p.released)
+        assertEquals(Phase.Failed("Couldn't play this book"), s.state.value.phase)
+        assertEquals("A" to 50_000L, records().last())
+    }
+
     @Test
     fun skipSeeksToClampedTarget() = runTest {
         val s = session()
