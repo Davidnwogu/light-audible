@@ -3,6 +3,10 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    // Required: the Light SDK plugin registers its KSP processor only when KSP is applied, and that
+    // processor generates com.thelightphone.sdk.generated.LightSdkRegistry. Without it the app
+    // crashes on launch with ClassNotFoundException.
+    alias(libs.plugins.ksp)
     alias(libs.plugins.light.sdk)
 }
 

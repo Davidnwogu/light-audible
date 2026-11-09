@@ -109,7 +109,7 @@ tool/
   Run it twice. The second run changes nothing (`git -C $WORKTREE diff --stat` shows one line in `settings.gradle.kts`).
 - [ ] **Step 2:** Write `tool/gradlew-sdk`: `exec "$WORKTREE/gradlew" -p "$WORKTREE" -DlightSdk.toolOnly=true "$@"`, after running `sdk-worktree.sh`. `chmod +x` both scripts.
 - [ ] **Step 3:** Write `tool/build.gradle.kts`, starting from `git -C $WORKTREE show v0.2.3:tool/build.gradle.kts`:
-  - Keep the `plugins` block (drop `ksp` and its room dependency) and the `android {}` block.
+  - Keep the `plugins` block, including `ksp` (the Light SDK plugin only registers the processor that generates `LightSdkRegistry` when KSP is applied; without it the app crashes on launch), and the `android {}` block. Drop only the room `ksp(...)` dependency.
   - Change the signing `storeFile` to `rootProject.file("sdk/keys/lightsdk-dev.jks")`.
   - Drop the `UploadToolTask`.
   - Dependencies: `project(":sdk:client")`, plus `project(":sdk:ui")` only if `LightText` doesn't resolve without it; `com.squareup.okhttp3:okhttp:4.12.0`, `org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1`, `org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2`, `androidx.datastore:datastore-preferences:1.2.1`.
