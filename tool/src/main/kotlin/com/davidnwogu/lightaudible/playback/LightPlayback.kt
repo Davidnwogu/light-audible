@@ -52,8 +52,8 @@ class LightPlaybackFactory(private val audio: LightAudio) : PlaybackFactory {
  *   start position is applied once the item reports a duration. Until then [positionMs] reads the
  *   requested start and `play()` is held back. The wait ends on a new player error (the session
  *   recovers) or after [SEEK_WAIT_MAX_MS], when it reports a [SEEK_TIMEOUT] source error instead of playing.
- * - [currentItemId] and [error] are refreshed straight from the player in [awaitReady] and after
- *   each load, so they never lag behind a collector.
+ * - [currentItemId], [error] and (with no start pending) [positionMs] are refreshed straight from the
+ *   player in [awaitReady] and after each load, so they never lag behind a collector.
  */
 class LightPlayback(private val player: LightAudioPlayer) : Playback {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -82,6 +82,7 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
     private fun refresh() {
         _currentItemId.value = liveItemId()
         _error.value = player.error.value.toPlaybackError()
+        if (pendingStart == null) _positionMs.value = player.positionMs.value
     }
 
     override suspend fun awaitReady(): Boolean = player.awaitReady().also { refresh() }

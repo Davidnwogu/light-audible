@@ -263,6 +263,31 @@ class PlaybackSessionTest {
     }
 
     @Test
+    fun carryCheckReadsTheLivePositionCurrentAfterConnecting() = runTest {
+        val s = releasedWhileSeekPending()
+        // The handle reads 0 until it connects; the player is really paused at 7_300_000.
+        val f2 = FakePlaybackFactory { liveA(0, playing = false).apply { positionOnReady = 7_300_000 } }
+        s.open(bookA, f2)
+        runCurrent()
+        assertTrue(f2.last.calls.none { it is Call.SetItem || it is Call.ReplaceItem }, "${f2.last.calls}")
+        assertEquals(7_300_000, s.state.value.positionMs)
+    }
+
+    @Test
+    fun switchingBooksRecordsTheCarryNotTheDeadSeeksPosition() = runTest {
+        val s = releasedWhileSeekPending()
+        api.putPositionCalls.clear()
+        resume["B"] = 7_000
+        // A fresh handle finds A live at ~0 (its start seek died), and the user plays B.
+        val f2 = FakePlaybackFactory { liveA(0, playing = false) }
+        s.open(bookB, f2)
+        runCurrent()
+        assertEquals(listOf(7_000L), f2.last.calls.filterIsInstance<Call.SetItem>().map { it.startMs }, "${f2.last.calls}")
+        assertTrue("A" to 3_600_000L in records(), "${records()}")
+        assertTrue(records().none { it.first == "A" && it.second < 3_600_000 }, "${records()}")
+    }
+
+    @Test
     fun carryOutlivesALoadInterruptedBeforeItReachesThePlayer() = runTest {
         val s = releasedWhileSeekPending()
         val gate = CompletableDeferred<Boolean>()

@@ -33,6 +33,11 @@ class FakePlayback : Playback {
     override val error = MutableStateFlow<PlaybackError?>(null)
 
     var ready = true
+    /**
+     * When set, [positionMs] is stale until [awaitReady], which makes this the current value, as a handle
+     * reads the connected player's position only on connect.
+     */
+    var positionOnReady: Long? = null
     /** When set, [awaitReady] suspends until the test completes it (its value is then the result). */
     var readyGate: CompletableDeferred<Boolean>? = null
     var autoPrepare = true
@@ -42,7 +47,9 @@ class FakePlayback : Playback {
 
     override suspend fun awaitReady(): Boolean {
         calls += Call.AwaitReady
-        return readyGate?.await() ?: ready
+        val ok = readyGate?.await() ?: ready
+        positionOnReady?.let { positionMs.value = it }
+        return ok
     }
 
     override fun setItem(item: PlaybackItem, startMs: Long) {

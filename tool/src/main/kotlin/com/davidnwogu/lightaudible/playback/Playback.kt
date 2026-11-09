@@ -29,7 +29,7 @@ interface Playback {
     /** The current failure. A repeated identical failure may never re-emit, so poll [StateFlow.value] when it matters. */
     val error: StateFlow<PlaybackError?>
 
-    /** Waits for the connection; false when the handle was refused or released. */
+    /** Waits for the connection; false when the handle was refused or released. After it, the flows' values are current. */
     suspend fun awaitReady(): Boolean
 
     /** Replaces the queue with [item], prepares it, and starts it at [startMs]. Playback starts on [play]. */

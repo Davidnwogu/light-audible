@@ -185,7 +185,12 @@ class PlaybackSession(
             return true
         }
         val resumeAt = lastPositionMs.takeIf { live == asin && item == asin && it > 0 }
-        if (live != null && live != asin) record(live, if (item == live) lastPositionMs else p.positionMs.value)
+        if (live != null && live != asin) {
+            val livePos = if (item == live) lastPositionMs else p.positionMs.value
+            // A live item whose start seek died with a released handle sits behind where it was loading.
+            val carried = unstarted?.takeIf { it.first == live && livePos + CARRY_TOLERANCE_MS < it.second }?.second
+            record(live, carried ?: livePos)
+        }
         item = null
         if (live != null && live != asin) pause(p)
         val source = sourceFor(asin, fresh = false) ?: return false
