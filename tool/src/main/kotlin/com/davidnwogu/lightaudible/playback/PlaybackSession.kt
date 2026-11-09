@@ -43,6 +43,10 @@ class PlaybackSession(
     private var lastPositionMs = 0L
     private var wasPlaying = false
     private var playPending = false // play() asked for, isPlaying not yet true
+    /** The loaded item has played since its last setItem/replaceItem, so the player has reached its start. */
+    private var startedSinceLoad = false
+    /** (asin, position) of an item released before it ever played: its start seek may have died with the handle. */
+    private var unstarted: Pair<String, Long>? = null
 
     /** While the recovery loop owns the item; position updates are ignored meanwhile. */
     private var recovering = false
@@ -70,8 +74,12 @@ class PlaybackSession(
         if (!newFactory && this.book?.asin == book.asin && openJob?.isActive == true) return
         // A handle opened through another (possibly finished) screen's factory is never reused: release it
         // (detached playback keeps going; the real position is recorded if an item is loaded) and open a
-        // fresh one, whose live queue the reuse path below then keeps.
+        // fresh one, whose live queue the reuse path below then keeps -- unless the released handle never
+        // played the item since loading it: its start seek may still have been pending (the player still
+        // at ~0, and the seek dies with the handle), so the fresh handle reloads it where the session had it.
         if (newFactory && handle != null) release()
+        val carryStartMs = unstarted?.takeIf { it.first == book.asin && handle == null }?.second
+        unstarted = null
         val switching = this.book?.asin != book.asin
         this.book = book
         this.factory = factory
@@ -81,7 +89,7 @@ class PlaybackSession(
             if (!switching) it.copy(phase = Phase.Preparing)
             else SessionState(book.asin, book.title, 0, book.runtimeMs ?: 0, it.isPlaying, Phase.Preparing)
         }
-        load(book, reuseLive = true)
+        load(book, reuseLive = carryStartMs == null, startMs = carryStartMs)
     }
 
     override fun attach() { attached = true }
@@ -135,14 +143,14 @@ class PlaybackSession(
         return true
     }
 
-    private fun load(book: LibraryBook, reuseLive: Boolean) {
+    private fun load(book: LibraryBook, reuseLive: Boolean, startMs: Long? = null) {
         openJob?.cancel()
         val p = handle ?: openHandle() ?: return
         val token = Any()
         loading = token
         openJob = scope.launch {
             val loaded = try {
-                loadInto(p, book, reuseLive)
+                loadInto(p, book, reuseLive, startMs)
             } finally {
                 if (loading === token) loading = null
             }
@@ -150,8 +158,8 @@ class PlaybackSession(
         }
     }
 
-    /** Returns false when the book could not be loaded (the phase says why). */
-    private suspend fun loadInto(p: Playback, book: LibraryBook, reuseLive: Boolean): Boolean {
+    /** Returns false when the book could not be loaded (the phase says why). [startMs] overrides the start of a reload. */
+    private suspend fun loadInto(p: Playback, book: LibraryBook, reuseLive: Boolean, startMs: Long?): Boolean {
         if (!p.awaitReady()) {
             fail(PLAY_FAILED, releaseNow = true)
             return false
@@ -172,7 +180,8 @@ class PlaybackSession(
         item = null
         if (live != null && live != asin) pause(p)
         val source = sourceFor(asin, fresh = false) ?: return false
-        val start = resumeAt ?: positions.resumePoint(asin)
+        val start = startMs ?: resumeAt ?: positions.resumePoint(asin)
+        startedSinceLoad = false
         p.setItem(playbackItem(book, source), start)
         item = asin
         streamed = source is PlaybackSource.Url
@@ -202,6 +211,7 @@ class PlaybackSession(
             playPending = false
             checkJob?.cancel()
             if (item != null) {
+                startedSinceLoad = true
                 stopRecovery()
                 _state.update { it.copy(phase = Phase.Ready) }
             }
@@ -246,6 +256,7 @@ class PlaybackSession(
             while (true) {
                 if (attempt > 0) delay(minOf(2_000L shl (attempt - 1).coerceAtMost(5), 60_000L))
                 val source = sourceFor(asin, fresh = true) ?: return@launch endRecovery()
+                startedSinceLoad = false
                 p.replaceItem(playbackItem(b, source), lastPositionMs)
                 requestPlay(p)
                 attempt++
@@ -344,6 +355,7 @@ class PlaybackSession(
     private fun release(record: Boolean = true) {
         val p = handle ?: return
         if (record) item?.let { record(it, lastPositionMs) }
+        unstarted = item?.takeIf { !startedSinceLoad }?.let { it to lastPositionMs }
         listOf(watchJob, tickJob, recoverJob, openJob, checkJob, giveUpJob).forEach { it?.cancel() }
         loading = null
         handle = null

@@ -134,6 +134,102 @@ class PlaybackSessionTest {
     }
 
     @Test
+    fun newFactoryDuringPendingStartSeekReloadsAtTheResumePoint() = runTest {
+        resume["A"] = 3_600_000
+        factory.next = { FakePlayback().apply { autoPrepare = false } } // start seek stays pending
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val old = factory.last
+        assertEquals(3_600_000, s.state.value.positionMs)
+        s.detach() // back to the Book screen
+        runCurrent()
+        // Play again within seconds: a new PlayerScreen, a new factory. The detached player holds A,
+        // but it never seeked, so a fresh handle reads its real position: 0.
+        val factory2 = FakePlaybackFactory {
+            FakePlayback().apply {
+                autoPrepare = false
+                currentItemId.value = "A"
+                positionMs.value = 0
+            }
+        }
+        s.open(bookA, factory2)
+        runCurrent()
+        assertTrue(old.released)
+        assertTrue(old.calls.none { it == Call.Pause }, "${old.calls}")
+        val fresh = factory2.last
+        val loads = fresh.calls.filter { it is Call.SetItem || it is Call.ReplaceItem }
+        assertEquals(1, loads.size, "${fresh.calls}")
+        assertEquals(3_600_000, (loads.single() as? Call.SetItem)?.startMs ?: (loads.single() as Call.ReplaceItem).startMs)
+        assertEquals(3_600_000, s.state.value.positionMs)
+        fresh.prepareSucceeds()
+        runCurrent()
+        assertTrue(s.state.value.isPlaying)
+        assertEquals(3_600_000, s.state.value.positionMs)
+        advanceTimeBy(61_000)
+        runCurrent()
+        assertTrue(records().isNotEmpty())
+        assertTrue(records().none { it.first == "A" && it.second < 3_600_000 }, "${records()}")
+    }
+
+    @Test
+    fun handleReleasedDuringPendingStartSeekIsReloadedAtTheResumePoint() = runTest {
+        resume["A"] = 3_600_000
+        factory.next = { FakePlayback().apply { autoPrepare = false } }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        s.detach()
+        advanceTimeBy(31_000) // the play-start grace ends: released with the seek still pending
+        runCurrent()
+        assertTrue(factory.last.released)
+        val factory2 = FakePlaybackFactory {
+            FakePlayback().apply {
+                autoPrepare = false
+                currentItemId.value = "A"
+                positionMs.value = 0
+            }
+        }
+        s.open(bookA, factory2)
+        runCurrent()
+        val fresh = factory2.last
+        assertEquals(listOf(3_600_000L), fresh.calls.filterIsInstance<Call.SetItem>().map { it.startMs }, "${fresh.calls}")
+        fresh.prepareSucceeds()
+        runCurrent()
+        assertTrue(s.state.value.isPlaying)
+        assertEquals(3_600_000, s.state.value.positionMs)
+        assertTrue(records().none { it.first == "A" && it.second < 3_600_000 }, "${records()}")
+    }
+
+    @Test
+    fun newFactoryWhilePlayingReusesTheLiveItem() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val old = factory.last
+        old.positionMs.value = 40_000
+        runCurrent()
+        val factory2 = FakePlaybackFactory {
+            FakePlayback().apply {
+                currentItemId.value = "A"
+                positionMs.value = 40_500
+                isPlaying.value = true
+            }
+        }
+        s.open(bookA, factory2)
+        runCurrent()
+        assertTrue(old.released)
+        val fresh = factory2.last
+        assertTrue(fresh.calls.none { it is Call.SetItem || it is Call.ReplaceItem }, "${fresh.calls}")
+        assertEquals(40_500, s.state.value.positionMs)
+        fresh.positionMs.value = 41_000
+        runCurrent()
+        assertEquals(41_000, s.state.value.positionMs)
+        assertTrue(s.state.value.isPlaying)
+        assertTrue(records().none { it.second < 40_000 }, "${records()}")
+    }
+
+    @Test
     fun openDifferentBookWhileOnePlaysRecordsOldPositionFirst() = runTest {
         val s = session()
         s.open(bookA, factory)
