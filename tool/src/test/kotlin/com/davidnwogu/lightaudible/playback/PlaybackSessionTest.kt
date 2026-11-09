@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -195,6 +196,86 @@ class PlaybackSessionTest {
         val fresh = factory2.last
         assertEquals(listOf(3_600_000L), fresh.calls.filterIsInstance<Call.SetItem>().map { it.startMs }, "${fresh.calls}")
         fresh.prepareSucceeds()
+        runCurrent()
+        assertTrue(s.state.value.isPlaying)
+        assertEquals(3_600_000, s.state.value.positionMs)
+        assertTrue(records().none { it.first == "A" && it.second < 3_600_000 }, "${records()}")
+    }
+
+    /** A FakePlayback connected to a detached player holding A at [positionMs]. */
+    private fun liveA(positionMs: Long, playing: Boolean) = FakePlayback().apply {
+        autoPrepare = false
+        currentItemId.value = "A"
+        this.positionMs.value = positionMs
+        isPlaying.value = playing
+    }
+
+    /** Opens A at resume 3_600_000 with the seek left pending, then lets the detached grace release it. */
+    private fun TestScope.releasedWhileSeekPending(): PlaybackSession {
+        resume["A"] = 3_600_000
+        factory.next = { FakePlayback().apply { autoPrepare = false } }
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        s.detach()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertTrue(factory.last.released)
+        return s
+    }
+
+    @Test
+    fun liveItemPlayingInAFreshProcessIsReusedByEveryNewFactory() = runTest {
+        val s = session() // fresh process: the detached player already plays A
+        // As on Main.immediate, the handle reports isPlaying before the load adopts the live item.
+        val gate = CompletableDeferred<Boolean>()
+        val f1 = FakePlaybackFactory { liveA(500_000, playing = true).apply { readyGate = gate } }
+        s.open(bookA, f1)
+        runCurrent()
+        gate.complete(true)
+        runCurrent()
+        val f2 = FakePlaybackFactory { liveA(501_000, playing = true) }
+        s.open(bookA, f2)
+        runCurrent()
+        for (p in f1.opened + f2.opened) {
+            assertTrue(p.calls.none { it is Call.SetItem || it is Call.ReplaceItem || it == Call.Pause }, "${p.calls}")
+        }
+        assertEquals(501_000, s.state.value.positionMs)
+        assertTrue(s.state.value.isPlaying)
+    }
+
+    @Test
+    fun carryYieldsToALivePlayerThatPlayedOnAfterTheRelease() = runTest {
+        val s = releasedWhileSeekPending()
+        // Played from the lock screen for an hour, still playing.
+        val f2 = FakePlaybackFactory { liveA(7_200_000, playing = true) }
+        s.open(bookA, f2)
+        runCurrent()
+        assertTrue(f2.last.calls.none { it is Call.SetItem || it is Call.ReplaceItem }, "${f2.last.calls}")
+        assertEquals(7_200_000, s.state.value.positionMs)
+        // Played on and then paused ahead of the carry: also reused.
+        val f3 = FakePlaybackFactory { liveA(7_300_000, playing = false) }
+        s.open(bookA, f3)
+        runCurrent()
+        assertTrue(f3.last.calls.none { it is Call.SetItem || it is Call.ReplaceItem }, "${f3.last.calls}")
+        assertEquals(7_300_000, s.state.value.positionMs)
+        assertTrue(records().none { it.first == "A" && it.second < 3_600_000 }, "${records()}")
+    }
+
+    @Test
+    fun carryOutlivesALoadInterruptedBeforeItReachesThePlayer() = runTest {
+        val s = releasedWhileSeekPending()
+        val gate = CompletableDeferred<Boolean>()
+        val f2 = FakePlaybackFactory { liveA(0, playing = false).apply { readyGate = gate } }
+        s.open(bookA, f2)
+        runCurrent() // waiting in awaitReady
+        val f3 = FakePlaybackFactory { liveA(0, playing = false) }
+        s.open(bookA, f3)
+        runCurrent()
+        assertTrue(f2.last.released)
+        assertTrue(f2.last.calls.none { it is Call.SetItem || it == Call.Play }, "${f2.last.calls}")
+        assertEquals(listOf(3_600_000L), f3.last.calls.filterIsInstance<Call.SetItem>().map { it.startMs }, "${f3.last.calls}")
+        f3.last.prepareSucceeds()
         runCurrent()
         assertTrue(s.state.value.isPlaying)
         assertEquals(3_600_000, s.state.value.positionMs)

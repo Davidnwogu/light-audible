@@ -4,6 +4,7 @@ import com.davidnwogu.lightaudible.playback.Playback
 import com.davidnwogu.lightaudible.playback.PlaybackError
 import com.davidnwogu.lightaudible.playback.PlaybackFactory
 import com.davidnwogu.lightaudible.playback.PlaybackItem
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -32,6 +33,8 @@ class FakePlayback : Playback {
     override val error = MutableStateFlow<PlaybackError?>(null)
 
     var ready = true
+    /** When set, [awaitReady] suspends until the test completes it (its value is then the result). */
+    var readyGate: CompletableDeferred<Boolean>? = null
     var autoPrepare = true
     private var playRequested = false
     val calls = mutableListOf<Call>()
@@ -39,7 +42,7 @@ class FakePlayback : Playback {
 
     override suspend fun awaitReady(): Boolean {
         calls += Call.AwaitReady
-        return ready
+        return readyGate?.await() ?: ready
     }
 
     override fun setItem(item: PlaybackItem, startMs: Long) {

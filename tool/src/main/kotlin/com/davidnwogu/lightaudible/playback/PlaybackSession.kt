@@ -45,7 +45,10 @@ class PlaybackSession(
     private var playPending = false // play() asked for, isPlaying not yet true
     /** The loaded item has played since its last setItem/replaceItem, so the player has reached its start. */
     private var startedSinceLoad = false
-    /** (asin, position) of an item released before it ever played: its start seek may have died with the handle. */
+    /**
+     * (asin, position) of an item released before it ever played: its start seek may have died with the handle.
+     * Kept until a load of any book reaches the player (setItem or the reuse path), so an interrupted load keeps it.
+     */
     private var unstarted: Pair<String, Long>? = null
 
     /** While the recovery loop owns the item; position updates are ignored meanwhile. */
@@ -75,11 +78,10 @@ class PlaybackSession(
         // A handle opened through another (possibly finished) screen's factory is never reused: release it
         // (detached playback keeps going; the real position is recorded if an item is loaded) and open a
         // fresh one, whose live queue the reuse path below then keeps -- unless the released handle never
-        // played the item since loading it: its start seek may still have been pending (the player still
-        // at ~0, and the seek dies with the handle), so the fresh handle reloads it where the session had it.
+        // played the item since loading it and the live player is still behind where the session had it
+        // (its start seek died with the handle): then the fresh handle reloads it at that position.
         if (newFactory && handle != null) release()
-        val carryStartMs = unstarted?.takeIf { it.first == book.asin && handle == null }?.second
-        unstarted = null
+        val carryStartMs = unstarted?.takeIf { it.first == book.asin }?.second
         val switching = this.book?.asin != book.asin
         this.book = book
         this.factory = factory
@@ -89,7 +91,7 @@ class PlaybackSession(
             if (!switching) it.copy(phase = Phase.Preparing)
             else SessionState(book.asin, book.title, 0, book.runtimeMs ?: 0, it.isPlaying, Phase.Preparing)
         }
-        load(book, reuseLive = carryStartMs == null, startMs = carryStartMs)
+        load(book, reuseLive = true, carryStartMs = carryStartMs)
     }
 
     override fun attach() { attached = true }
@@ -143,14 +145,14 @@ class PlaybackSession(
         return true
     }
 
-    private fun load(book: LibraryBook, reuseLive: Boolean, startMs: Long? = null) {
+    private fun load(book: LibraryBook, reuseLive: Boolean, carryStartMs: Long? = null) {
         openJob?.cancel()
         val p = handle ?: openHandle() ?: return
         val token = Any()
         loading = token
         openJob = scope.launch {
             val loaded = try {
-                loadInto(p, book, reuseLive, startMs)
+                loadInto(p, book, reuseLive, carryStartMs)
             } finally {
                 if (loading === token) loading = null
             }
@@ -158,15 +160,22 @@ class PlaybackSession(
         }
     }
 
-    /** Returns false when the book could not be loaded (the phase says why). [startMs] overrides the start of a reload. */
-    private suspend fun loadInto(p: Playback, book: LibraryBook, reuseLive: Boolean, startMs: Long?): Boolean {
+    /**
+     * Returns false when the book could not be loaded (the phase says why). [carryStartMs] is a position carried
+     * from a handle released before its item played: it overrides the live item only while that is paused behind it.
+     */
+    private suspend fun loadInto(p: Playback, book: LibraryBook, reuseLive: Boolean, carryStartMs: Long?): Boolean {
         if (!p.awaitReady()) {
             fail(PLAY_FAILED, releaseNow = true)
             return false
         }
         val asin = book.asin
         val live = p.currentItemId.value
-        if (reuseLive && live == asin) {
+        val liveBehindCarry = carryStartMs != null && !p.isPlaying.value &&
+            p.positionMs.value + CARRY_TOLERANCE_MS < carryStartMs
+        if (reuseLive && live == asin && !liveBehindCarry) {
+            unstarted = null
+            if (p.isPlaying.value) startedSinceLoad = true
             item = asin
             streamed = !downloads.isDownloaded(asin)
             setPosition(p.positionMs.value)
@@ -180,8 +189,9 @@ class PlaybackSession(
         item = null
         if (live != null && live != asin) pause(p)
         val source = sourceFor(asin, fresh = false) ?: return false
-        val start = startMs ?: resumeAt ?: positions.resumePoint(asin)
+        val start = carryStartMs ?: resumeAt ?: positions.resumePoint(asin)
         startedSinceLoad = false
+        unstarted = null
         p.setItem(playbackItem(book, source), start)
         item = asin
         streamed = source is PlaybackSource.Url
@@ -210,8 +220,8 @@ class PlaybackSession(
             wasPlaying = true
             playPending = false
             checkJob?.cancel()
+            startedSinceLoad = true // also a live item this handle has not adopted yet
             if (item != null) {
-                startedSinceLoad = true
                 stopRecovery()
                 _state.update { it.copy(phase = Phase.Ready) }
             }
@@ -355,7 +365,8 @@ class PlaybackSession(
     private fun release(record: Boolean = true) {
         val p = handle ?: return
         if (record) item?.let { record(it, lastPositionMs) }
-        unstarted = item?.takeIf { !startedSinceLoad }?.let { it to lastPositionMs }
+        // No item: a load was interrupted before reaching the player, so a pending carry stays as it was.
+        if (item != null) unstarted = item?.takeIf { !startedSinceLoad }?.let { it to lastPositionMs }
         listOf(watchJob, tickJob, recoverJob, openJob, checkJob, giveUpJob).forEach { it?.cancel() }
         loading = null
         handle = null
@@ -393,6 +404,8 @@ class PlaybackSession(
         const val REPORT_INTERVAL_MS = 60_000L
         const val URL_MARGIN_MS = 10 * 60_000L
         const val GRACE_MS = 1_000L
+        /** A live position this close to a carried one already reached it. */
+        const val CARRY_TOLERANCE_MS = 1_000L
         const val PLAY_START_GRACE_MS = 30_000L
         const val ATTEMPT_CHECK_MS = 1_000L
         const val ATTEMPT_MAX_MS = 30_000L
