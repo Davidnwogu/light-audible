@@ -1001,4 +1001,55 @@ class PlaybackSessionTest {
         assertTrue(Call.SeekTo(600_000) in calls, "$calls")
         assertEquals(600_000, s.state.value.positionMs)
     }
+
+    @Test
+    fun seekAfterReleaseIsKeptAndTheReopenLoadsThere() = runTest {
+        remoteFollowsRecords()
+        val s = session()
+        playPauseRelease(s, 7_000)
+        s.seekTo(600_000)
+        runCurrent()
+        assertEquals(600_000, s.state.value.positionMs)
+        assertFalse(s.state.value.isPlaying) // a seek never starts audio
+        assertEquals(1, factory.openCount)
+        val f2 = FakePlaybackFactory()
+        s.togglePlay(f2)
+        runCurrent()
+        val sets = f2.last.calls.filterIsInstance<Call.SetItem>()
+        assertEquals(listOf("A" to 600_000L), sets.map { it.item.asin to it.startMs }, "${f2.last.calls}")
+        assertEquals(600_000, s.state.value.positionMs)
+        assertTrue(s.state.value.isPlaying)
+    }
+
+    @Test
+    fun skipAfterReleaseMovesThePendingStart() = runTest {
+        remoteFollowsRecords()
+        val s = session()
+        playPauseRelease(s, 7_000)
+        s.skip(15_000)
+        runCurrent()
+        assertEquals(22_000, s.state.value.positionMs)
+        val f2 = FakePlaybackFactory()
+        s.togglePlay(f2)
+        runCurrent()
+        val sets = f2.last.calls.filterIsInstance<Call.SetItem>()
+        assertEquals(listOf("A" to 22_000L), sets.map { it.item.asin to it.startMs }, "${f2.last.calls}")
+    }
+
+    @Test
+    fun openingAnotherBookDropsThePendingStart() = runTest {
+        remoteFollowsRecords()
+        val s = session()
+        playPauseRelease(s, 7_000)
+        s.seekTo(600_000)
+        s.open(bookB, factory)
+        runCurrent()
+        val p = factory.last
+        s.togglePlay(factory) // pause B
+        runCurrent()
+        s.open(bookA, factory)
+        runCurrent()
+        val sets = p.calls.filterIsInstance<Call.SetItem>()
+        assertEquals(listOf("B" to 0L, "A" to 7_000L), sets.map { it.item.asin to it.startMs }, "${p.calls}")
+    }
 }

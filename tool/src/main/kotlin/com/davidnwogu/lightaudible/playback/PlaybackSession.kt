@@ -54,6 +54,11 @@ class PlaybackSession(
      * Kept until a load of any book reaches the player (setItem or the reuse path), so an interrupted load keeps it.
      */
     private var unstarted: Pair<String, Long>? = null
+    /**
+     * (asin, position) the user sought to while [lastBook] had no handle. The next open of that book starts
+     * there (togglePlay's reopen, open or retry); any open drops it, so another book's open discards it.
+     */
+    private var pendingStart: Pair<String, Long>? = null
 
     /** While the recovery loop owns the item; position updates are ignored meanwhile. */
     private var recovering = false
@@ -80,8 +85,10 @@ class PlaybackSession(
     override fun open(book: LibraryBook, factory: PlaybackFactory, startAtMs: Long?) =
         openBook(book, factory, startAtMs, attach = true)
 
-    private fun openBook(book: LibraryBook, factory: PlaybackFactory, startAtMs: Long?, attach: Boolean) {
+    private fun openBook(book: LibraryBook, factory: PlaybackFactory, chosenStartMs: Long?, attach: Boolean) {
         if (attach) attached = true
+        val startAtMs = chosenStartMs ?: pendingStart?.takeIf { it.first == book.asin }?.second
+        pendingStart = null
         val newFactory = factory !== this.factory
         if (startAtMs == null && !newFactory && this.book?.asin == book.asin && openJob?.isActive == true) return
         // A handle opened through another (possibly finished) screen's factory is never reused: release it
@@ -117,10 +124,11 @@ class PlaybackSession(
 
     /**
      * With no handle (released, given up or failed), reopens [lastBook] through [factory] at its saved position
-     * and plays it, leaving [attached] as it was: a caller that is not a Player screen never has to detach.
+     * (or where [seekTo] moved it meanwhile) and plays it, leaving [attached] as it was: a caller that is not a
+     * Player screen never has to detach.
      */
     override fun togglePlay(factory: PlaybackFactory) {
-        val p = handle ?: return run { _lastBook.value?.let { openBook(it, factory, startAtMs = null, attach = false) } }
+        val p = handle ?: return run { _lastBook.value?.let { openBook(it, factory, chosenStartMs = null, attach = false) } }
         val e = p.error.value
         if (recovering) {
             stopRecovery()
@@ -140,10 +148,15 @@ class PlaybackSession(
 
     override fun skip(deltaMs: Long) = seekTo(skipTarget(lastPositionMs, _state.value.durationMs, deltaMs))
 
+    /** With no handle, moves where [lastBook] will start when reopened, without playing. */
     override fun seekTo(ms: Long) {
-        val p = handle ?: return
-        if (item == null) return
         val target = ms.coerceAtLeast(0)
+        val p = handle ?: return run {
+            val b = _lastBook.value ?: return
+            pendingStart = b.asin to target
+            setPosition(target)
+        }
+        if (item == null) return
         p.seekTo(target)
         setPosition(target)
     }
@@ -155,7 +168,9 @@ class PlaybackSession(
         if (handle == null && factory == null) return false
         stopRecovery()
         _state.update { it.copy(phase = Phase.Preparing) }
-        load(b, reuseLive = false)
+        val startAtMs = pendingStart?.takeIf { it.first == b.asin }?.second
+        pendingStart = null
+        load(b, reuseLive = false, startAtMs = startAtMs)
         return true
     }
 

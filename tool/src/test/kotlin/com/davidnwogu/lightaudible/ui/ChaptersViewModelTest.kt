@@ -10,7 +10,22 @@ import com.davidnwogu.lightaudible.fakes.FakeServerApi
 import com.davidnwogu.lightaudible.playback.Phase
 import com.davidnwogu.lightaudible.playback.PlaybackFactory
 import com.davidnwogu.lightaudible.playback.SessionState
+import com.davidnwogu.lightaudible.api.RemotePosition
+import com.davidnwogu.lightaudible.api.ServerClock
+import com.davidnwogu.lightaudible.fakes.FakePlayback
+import com.davidnwogu.lightaudible.fakes.FakePlaybackFactory
+import com.davidnwogu.lightaudible.fakes.InMemoryToolStore
+import com.davidnwogu.lightaudible.playback.PlaybackSession
 import com.davidnwogu.lightaudible.sync.ChapterCache
+import com.davidnwogu.lightaudible.sync.Downloads
+import com.davidnwogu.lightaudible.sync.PositionSync
+import com.davidnwogu.lightaudible.sync.Preparer
+import java.time.Instant
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.runCurrent
+import okhttp3.OkHttpClient
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -88,5 +103,39 @@ class ChaptersViewModelTest {
         assertEquals(listOf("open A"), s.calls)
         assertEquals(3_600_000L, s.openStarts.single())
         assertSame(factory, s.factories.single())
+    }
+
+    @Test
+    fun chapterTapOnReleasedBookMovesWhereTheNextPlayStarts() = runTest {
+        api.prepareResult = { ApiResult.Ok(BookState(BookStatus.Ready, "https://s/$it", "2030-01-01T06:00:00Z")) }
+        api.positionResult = { ApiResult.Ok(RemotePosition(0L, "2029-12-31T00:00:00Z")) }
+        api.putPositionResult = { ApiResult.Ok(Unit) }
+        val t0 = Instant.parse("2030-01-01T00:00:00Z").toEpochMilli()
+        val preparer = Preparer(api, 5_000)
+        val dir = kotlin.io.path.createTempDirectory("ch").toFile()
+        val session = PlaybackSession(
+            PositionSync(api, InMemoryToolStore(), ServerClock({ t0 }, 0, {})), preparer,
+            Downloads(dir, OkHttpClient(), preparer, backgroundScope), MutableStateFlow(1f), backgroundScope,
+        ) { t0 + testScheduler.currentTime }
+        val f1 = FakePlaybackFactory()
+        session.open(bookA, f1)
+        runCurrent()
+        session.togglePlay(f1) // pause
+        runCurrent()
+        session.detach() // paused with no Player: the handle is released
+        runCurrent()
+        assertTrue(f1.last.released)
+
+        val v = ChaptersViewModel(bookA, session, ChapterCache(api), factory, 0)
+        advanceUntilIdle()
+        v.select(chapters[1])
+        assertEquals(3_600_000, session.state.value.positionMs)
+        assertFalse(session.state.value.isPlaying)
+
+        val f2 = FakePlaybackFactory()
+        session.togglePlay(f2)
+        runCurrent()
+        val sets = f2.last.calls.filterIsInstance<FakePlayback.Call.SetItem>()
+        assertEquals(listOf("A" to 3_600_000L), sets.map { it.item.asin to it.startMs }, "${f2.last.calls}")
     }
 }

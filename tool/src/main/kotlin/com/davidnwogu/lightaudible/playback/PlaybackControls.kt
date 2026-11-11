@@ -20,7 +20,11 @@ interface PlaybackControls {
 
     /** Pauses or plays; with no handle, reopens [lastBook] through [factory] at its saved position. No-op if none. */
     fun togglePlay(factory: PlaybackFactory)
+
+    /** Like [seekTo], from the current position. */
     fun skip(deltaMs: Long)
+
+    /** Seeks the loaded book; with no handle, moves where [lastBook] starts when next played. Never plays. */
     fun seekTo(ms: Long)
 
     /** Re-runs preparation after a failure. Returns false when it could not act (e.g. the handle was released); then use [open]. */
