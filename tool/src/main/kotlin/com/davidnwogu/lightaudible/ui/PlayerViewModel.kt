@@ -17,10 +17,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** The last chapter with `startMs <= positionMs`; null for an empty list. */
-fun currentChapter(chapters: List<Chapter>, positionMs: Long): Chapter? =
-    chapters.lastOrNull { it.startMs <= positionMs }
-
 data class PlayerUiState(
     val title: String,
     val chapterTitle: String?,

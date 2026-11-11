@@ -5,6 +5,7 @@ import com.davidnwogu.lightaudible.api.BookState
 import com.davidnwogu.lightaudible.api.BookStatus
 import com.davidnwogu.lightaudible.api.Chapter
 import com.davidnwogu.lightaudible.api.LibraryBook
+import com.davidnwogu.lightaudible.fakes.FakeControls
 import com.davidnwogu.lightaudible.fakes.FakeServerApi
 import com.davidnwogu.lightaudible.playback.Phase
 import com.davidnwogu.lightaudible.playback.Playback
@@ -43,22 +44,6 @@ class CurrentChapterTest {
 
     @Test
     fun emptyListIsNull() = assertNull(currentChapter(emptyList(), 5))
-}
-
-private class FakeControls(initial: SessionState) : PlaybackControls {
-    override val state = MutableStateFlow(initial)
-    val calls = mutableListOf<String>()
-    var retryResult = true
-
-    override val lastBook = MutableStateFlow<LibraryBook?>(null)
-
-    override fun open(book: LibraryBook, factory: PlaybackFactory, startAtMs: Long?) { calls += "open ${book.asin}" }
-    override fun attach() { calls += "attach" }
-    override fun detach() { calls += "detach" }
-    override fun togglePlay(factory: PlaybackFactory) { calls += "toggle" }
-    override fun skip(deltaMs: Long) { calls += "skip $deltaMs" }
-    override fun seekTo(ms: Long) { calls += "seek $ms" }
-    override fun retry(): Boolean { calls += "retry"; return retryResult }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)

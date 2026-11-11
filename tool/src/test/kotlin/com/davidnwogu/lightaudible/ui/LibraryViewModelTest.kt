@@ -3,7 +3,21 @@ package com.davidnwogu.lightaudible.ui
 import com.davidnwogu.lightaudible.api.ApiResult
 import com.davidnwogu.lightaudible.api.LibraryBook
 import com.davidnwogu.lightaudible.api.LibraryPage
+import com.davidnwogu.lightaudible.api.BookState
+import com.davidnwogu.lightaudible.api.BookStatus
+import com.davidnwogu.lightaudible.api.Chapter
+import com.davidnwogu.lightaudible.fakes.FakeControls
 import com.davidnwogu.lightaudible.fakes.FakeServerApi
+import com.davidnwogu.lightaudible.playback.Phase
+import com.davidnwogu.lightaudible.playback.PlaybackFactory
+import com.davidnwogu.lightaudible.playback.SessionState
+import com.davidnwogu.lightaudible.sync.ChapterCache
+import com.davidnwogu.lightaudible.sync.Downloads
+import com.davidnwogu.lightaudible.sync.Preparer
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import okhttp3.OkHttpClient
+import kotlin.test.assertTrue
 import com.davidnwogu.lightaudible.fakes.InMemoryToolStore
 import com.davidnwogu.lightaudible.store.LibraryCache
 import kotlin.test.AfterTest
@@ -24,6 +38,22 @@ import kotlinx.coroutines.test.setMain
 
 private fun book(asin: String, title: String, vararg authors: String, narrators: List<String> = emptyList(), playable: Boolean = true) =
     LibraryBook(asin, title, authors.toList(), narrators, 1000L, playable)
+
+private val LibraryUiState.visible get() = rows.map { it.book }
+
+class FormatAuthorsTest {
+    @Test
+    fun formatAuthorsDropsCreditsAndCaps() {
+        assertEquals(
+            "Marcus Tullius Cicero",
+            formatAuthors(listOf("Marcus Tullius Cicero", "Philip Freeman - Introduction", "Philip Freeman - Translator")),
+        )
+        assertEquals("A, B +2", formatAuthors(listOf("A", "B", "C", "D")))
+        assertEquals("Rachel Joy Welcher", formatAuthors(listOf("Rachel Joy Welcher", "Scott Sauls - foreword")))
+        assertEquals("X", formatAuthors(listOf("X - Editor")))
+        assertEquals("", formatAuthors(emptyList()))
+    }
+}
 
 class FilterBooksTest {
     private val hobbit = book("A1", "The Hobbit", "J.R.R. Tolkien", narrators = listOf("Rob Inglis"))
@@ -58,8 +88,18 @@ class LibraryViewModelTest {
     @AfterTest
     fun tearDown() = Dispatchers.resetMain()
 
+    private val dir = kotlin.io.path.createTempDirectory("lib").toFile()
+    private val chapterCache = ChapterCache(api)
+    private val session = FakeControls(SessionState(null, null, 0, 0, false, Phase.Idle))
+    private val dl = Downloads(dir, OkHttpClient(), Preparer(api), kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined), Dispatchers.Unconfined)
+
+    private fun vm(
+        flush: suspend () -> Unit = {},
+        connected: Flow<Boolean> = emptyFlow(),
+    ) = LibraryViewModel(store, api, session, chapterCache, dl, flush, connected) { now }
+
     private fun TestScope.shown(): LibraryViewModel =
-        LibraryViewModel(store, api) { now }.also {
+        vm().also {
             it.onShow()
             advanceUntilIdle()
         }
@@ -128,7 +168,7 @@ class LibraryViewModelTest {
             bannerDuringCall = vm.state.value.banner
             ApiResult.NotModified
         }
-        vm = LibraryViewModel(store, api) { now }
+        vm = vm()
         vm.onShow()
         advanceUntilIdle()
         assertEquals("Connecting…", bannerDuringCall)
@@ -161,7 +201,7 @@ class LibraryViewModelTest {
     fun everyShowFlushesPendingPositions() = runTest {
         store.saveLibraryCache(LibraryCache(old, "e1", now))
         var flushes = 0
-        val vm = LibraryViewModel(store, api, flushPositions = { flushes++ }) { now }
+        val vm = vm(flush = { flushes++ })
         vm.onShow()
         advanceUntilIdle()
         assertEquals(1, flushes)
@@ -175,7 +215,7 @@ class LibraryViewModelTest {
         store.saveLibraryCache(LibraryCache(old, "e1", now))
         var flushes = 0
         val connected = MutableStateFlow(true)
-        val vm = LibraryViewModel(store, api, flushPositions = { flushes++ }, connected = connected) { now }
+        val vm = vm(flush = { flushes++ }, connected = connected)
         vm.onShow()
         advanceUntilIdle()
         assertEquals(1, flushes) // the show; already-connected is not a return
@@ -185,5 +225,104 @@ class LibraryViewModelTest {
         connected.value = true
         advanceUntilIdle()
         assertEquals(2, flushes)
+    }
+
+    private val chapters = listOf(Chapter(0, "One", 0, 3_600_000), Chapter(1, "Two", 3_600_000, 3_600_000))
+    private val a = book("A", "A", "Au Thor")
+
+    private fun sess(asin: String? = "A", pos: Long = 0, phase: Phase = Phase.Ready, playing: Boolean = false) =
+        SessionState(asin, "A", pos, 7_200_000, playing, phase)
+
+    private suspend fun TestScope.withLast(
+        state: SessionState,
+        last: LibraryBook? = a,
+        books: List<LibraryBook> = listOf(a),
+    ): LibraryViewModel {
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.Ready, chapters = chapters)) }
+        store.saveLibraryCache(LibraryCache(books, "e", now))
+        session.state.value = state
+        session.lastBook.value = last
+        return shown().also { advanceUntilIdle() }
+    }
+
+    @Test
+    fun nowPlayingHiddenWithNothingOpened() = runTest {
+        assertNull(withLast(sess(null), last = null).state.value.nowPlaying)
+    }
+
+    @Test
+    fun nowPlayingShowsTitleAndChapter() = runTest {
+        val v = withLast(sess(pos = 3_700_000))
+        assertEquals(NowPlayingBar("A · Two", showPlayPause = true, isPlaying = false), v.state.value.nowPlaying)
+    }
+
+    @Test
+    fun nowPlayingFollowsPosition() = runTest {
+        val v = withLast(sess(pos = 0, playing = true))
+        assertEquals("A · One", v.state.value.nowPlaying?.text)
+        session.state.value = sess(pos = 3_700_000, playing = true)
+        advanceUntilIdle()
+        assertEquals(NowPlayingBar("A · Two", true, true), v.state.value.nowPlaying)
+    }
+
+    @Test
+    fun nowPlayingShowsPreparingWithoutButton() = runTest {
+        val v = withLast(sess(phase = Phase.Preparing))
+        assertEquals(NowPlayingBar("A · Preparing…", false, false), v.state.value.nowPlaying)
+        session.state.value = sess(phase = Phase.Connecting)
+        advanceUntilIdle()
+        assertEquals(NowPlayingBar("A · Connecting…", false, false), v.state.value.nowPlaying)
+    }
+
+    @Test
+    fun nowPlayingReconnectingKeepsButton() = runTest {
+        val v = withLast(sess(phase = Phase.Reconnecting))
+        assertEquals(NowPlayingBar("A · Reconnecting…", true, false), v.state.value.nowPlaying)
+    }
+
+    @Test
+    fun nowPlayingFailedNeedsSignInAndUnplayableHaveNoButton() = runTest {
+        val v = withLast(sess(phase = Phase.Failed("Disk full")))
+        assertEquals(NowPlayingBar("A · Disk full", false, false), v.state.value.nowPlaying)
+        session.state.value = sess(phase = Phase.NeedsSignIn)
+        advanceUntilIdle()
+        assertEquals(NowPlayingBar("A · Sign in again on your setup page", false, false), v.state.value.nowPlaying)
+        session.state.value = sess(phase = Phase.Unplayable)
+        advanceUntilIdle()
+        assertEquals(NowPlayingBar("A · This book can't be played", false, false), v.state.value.nowPlaying)
+    }
+
+    @Test
+    fun nowPlayingSurvivesRelease() = runTest {
+        val v = withLast(sess(asin = null, phase = Phase.Idle))
+        assertEquals(NowPlayingBar("A", showPlayPause = true, isPlaying = false), v.state.value.nowPlaying)
+    }
+
+    @Test
+    fun rowsMarkLoadedAndDownloaded() = runTest {
+        val b = book("B", "Bee", "Au - Credit", "X", "Y", "Z")
+        java.io.File(dir, "B.m4b").writeText("x")
+        val v = withLast(sess(asin = "A"), books = listOf(a, b))
+        val (ra, rb) = v.state.value.rows
+        assertTrue(ra.isLoaded); assertFalse(ra.isDownloaded)
+        assertFalse(rb.isLoaded); assertTrue(rb.isDownloaded)
+        assertEquals("X, Y +1", rb.authors)
+    }
+
+    @Test
+    fun clearQueryRestoresAllRows() = runTest {
+        store.saveLibraryCache(LibraryCache(old + fresh, "e1", now))
+        val v = shown()
+        v.setQuery("other")
+        assertEquals(1, v.state.value.rows.size)
+        v.clearQuery()
+        assertEquals("", v.state.value.query)
+        assertEquals(2, v.state.value.rows.size)
+    }
+
+    @Test
+    fun togglePlayDelegatesToSession() = runTest {
+        shown().togglePlay(PlaybackFactory { error("unused") })
+        assertEquals(listOf("toggle"), session.calls)
     }
 }
