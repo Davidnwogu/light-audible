@@ -54,7 +54,7 @@ pair the tool once, then check each screen against `docs/superpowers/specs/2026-
   - ▶ on a never-played book: "Preparing…" (can take minutes for a long book), then the chapter line and ⏸.
   - Speed: tap cycles 1x, 1.25x, 1.5x, 2x; the rate applies at once and survives leaving and reopening the Player.
   - Download: tap shows "n%", tap again cancels; a finished download shows ⤓ and a tap asks "Remove download?" (Cancel keeps it).
-  - Offline or failed: "Reconnecting…", "Couldn't play this book" with "Try again".
+  - Offline or failed: "Reconnecting…" (⏸ still pauses; skips are disabled), "Couldn't play this book" with "Try again".
   - Disabled controls are drawn lighter and do not respond (for example ↺15 and 15↻ before ▶; refresh while the Library is fetching).
 - **Chapters**: back and "Chapters" bar; one-line rows with durations right-aligned in a column; opens scrolled to the current chapter (▸, bold); tapping a row seeks and returns to the Player.
 - **Resume after a long pause** (not covered by the quick pass): pause, leave it over 15 minutes, press play on the Library's bar; it should resume.

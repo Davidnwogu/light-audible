@@ -32,7 +32,7 @@ data class PlayerUiState(
     val progress: Float,
     val position: String,
     val isPlaying: Boolean,
-    /** Play/pause enabled. */
+    /** Play/pause enabled; also while reconnecting, so the recovery can be paused. */
     val controlsEnabled: Boolean,
     /** Skips and the progress bar enabled; false until the book is loaded. */
     val skipsEnabled: Boolean,
@@ -101,6 +101,8 @@ class PlayerViewModel(
         val positionMs = if (loaded) s.positionMs else l.resumeMs
         val status = if (loaded) statusLine(s.phase) else null
         val busy = status != null
+        // Reconnecting: play/pause stays on, shown as pause; a tap stops the recovery (the session pauses it).
+        val reconnecting = loaded && s.phase is Phase.Reconnecting
         val download = downloadControl(dlProgress)
         return PlayerUiState(
             title = book.title,
@@ -110,8 +112,8 @@ class PlayerViewModel(
                 .filter { it.isNotEmpty() }.joinToString(" · "),
             progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
             position = formatDuration(positionMs),
-            isPlaying = loaded && s.isPlaying,
-            controlsEnabled = !busy,
+            isPlaying = loaded && s.isPlaying || reconnecting,
+            controlsEnabled = !busy || reconnecting,
             skipsEnabled = loaded && !busy,
             isPreview = !loaded,
             download = download,

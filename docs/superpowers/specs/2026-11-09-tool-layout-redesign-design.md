@@ -86,7 +86,8 @@ Layout, top to bottom, all centred except the back button:
 |---|---|---|---|
 | Not playing yet (opened from the Library) | First chapter, or the chapter at the resume point | Enabled; ▶ | Position shows where ▶ will resume. Nothing loads until ▶. |
 | Playing / paused | Current chapter | Enabled | |
-| Preparing / Connecting / Reconnecting | "Preparing…", "Connecting…" or "Reconnecting…" | Disabled (drawn lighter) | |
+| Preparing / Connecting | "Preparing…" or "Connecting…" | Disabled (drawn lighter) | |
+| Reconnecting | "Reconnecting…" | Play/pause stays enabled, shown as pause; skips disabled (drawn lighter) | Pause stops the recovery, as on the Library's bar. |
 | Failed | "Couldn't prepare this book" or "Couldn't play this book", with "Try again" under it | Disabled | |
 | Unplayable | "This book can't be played" | Disabled | No Try again. |
 | Needs sign-in | "Sign in again on your setup page" | Disabled | No Try again. |

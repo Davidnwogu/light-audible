@@ -206,10 +206,20 @@ class PlayerViewModelTest {
     }
 
     @Test
-    fun reconnectingStatus() = runTest {
-        val st = statusOf(Phase.Reconnecting)
+    fun reconnectingKeepsPauseEnabledButNotSkips() = runTest {
+        val s = session(phase = Phase.Reconnecting, playing = false)
+        val v = vm(s)
+        val st = v.state.value
         assertEquals("Reconnecting…", st.chapterLine)
-        assertDisabled(st)
+        assertTrue(st.controlsEnabled)
+        assertTrue(st.isPlaying) // shown as pause: a tap stops the recovery
+        assertFalse(st.skipsEnabled)
+        s.calls.clear()
+        v.playPause()
+        v.back15()
+        v.forward15()
+        v.seekToFraction(0.5f)
+        assertEquals(listOf("toggle"), s.calls)
     }
 
     @Test
