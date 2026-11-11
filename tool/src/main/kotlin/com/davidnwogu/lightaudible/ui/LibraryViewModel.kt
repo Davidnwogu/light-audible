@@ -67,6 +67,15 @@ class LibraryViewModel(
     private val _state = MutableStateFlow(LibraryUiState())
     val state: StateFlow<LibraryUiState> = _state.asStateFlow()
 
+    // Declared before init: with Main.immediate its collectors run (and read these) during construction.
+    private var lastLoaded: String? = null
+    private var lastProgress: Map<String, Float> = emptyMap()
+
+    /** File checks per asin, so rebuilding rows never touches the disk for a known book. */
+    private val downloaded = HashMap<String, Boolean>()
+
+    private fun isDownloaded(asin: String) = downloaded.getOrPut(asin) { downloads.isDownloaded(asin) }
+
     init {
         // Rows and the bar are rebuilt synchronously from the inputs' current values; these just trigger that.
         viewModelScope.launch { session.state.collect { refresh(rows = false) } }
@@ -77,7 +86,15 @@ class LibraryViewModel(
             }
         }
         viewModelScope.launch { chapters.updates.collect { refresh(rows = false) } }
-        viewModelScope.launch { downloads.progress.collect { refresh(rows = true) } }
+        viewModelScope.launch {
+            downloads.progress.collect { progress ->
+                // Only a download starting or ending can change a file's presence; progress ticks cannot.
+                val changed = (progress.keys + lastProgress.keys).filter { (it in progress) != (it in lastProgress) }
+                lastProgress = progress
+                changed.forEach { downloaded.remove(it) }
+                refresh(rows = changed.isNotEmpty())
+            }
+        }
     }
 
     fun togglePlay(factory: PlaybackFactory) = session.togglePlay(factory)
@@ -127,23 +144,22 @@ class LibraryViewModel(
     }
 
     private fun setBooks(books: List<LibraryBook>) {
+        downloaded.clear() // re-checked on each load, so a removal made elsewhere shows
         _state.value = _state.value.copy(books = books)
         refresh(rows = true)
     }
 
-    private var lastLoaded: String? = null
 
     /** Rebuilds the bar, and the rows when [rows] is set or the loaded book changed (position ticks skip them). */
     private fun refresh(rows: Boolean) {
         val cur = _state.value
-        val s = session.state.value
-        val loadedAsin = s.asin.takeIf { s.phase != Phase.Idle }
+        val loadedAsin = session.lastBook.value?.asin // as the now-playing bar, so ♪ survives release
         val rebuild = rows || loadedAsin != lastLoaded
         lastLoaded = loadedAsin
         _state.value = cur.copy(
             rows = if (rebuild) {
                 filterBooks(cur.books, cur.query).map {
-                    LibraryRow(it, formatAuthors(it.authors), it.asin == loadedAsin, downloads.isDownloaded(it.asin))
+                    LibraryRow(it, formatAuthors(it.authors), it.asin == loadedAsin, isDownloaded(it.asin))
                 }
             } else {
                 cur.rows
@@ -189,7 +205,7 @@ class LibraryViewModel(
                 cache = bumped
             }
             ApiResult.NeedsSignIn, ApiResult.Unauthorized -> banner = BANNER_SIGN_IN
-            else -> if (cache == null) banner = BANNER_UNREACHABLE // nothing to show otherwise
+            else -> banner = BANNER_UNREACHABLE // any cached list stays usable
         }
         _state.value = _state.value.copy(loading = false, banner = banner)
     }

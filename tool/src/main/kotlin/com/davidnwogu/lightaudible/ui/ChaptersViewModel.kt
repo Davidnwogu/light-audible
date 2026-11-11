@@ -10,9 +10,13 @@ import com.thelightphone.sdk.LightViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+private const val LOADING = "Loading…"
+private const val NO_CHAPTERS = "No chapters"
 
 data class ChapterRow(val chapter: Chapter, val length: String, val isCurrent: Boolean)
 
@@ -26,6 +30,11 @@ class ChaptersViewModel(
 ) : LightViewModel<Unit>() {
     private val chapters = MutableStateFlow(chapterCache.cached(book.asin).orEmpty())
 
+    private val _status = MutableStateFlow(if (chapters.value.isEmpty()) LOADING else null)
+
+    /** One line shown instead of the list: "Loading…" while fetching, "No chapters" when none came back. */
+    val status: StateFlow<String?> = _status.asStateFlow()
+
     val rows: StateFlow<List<ChapterRow>> =
         combine(chapters, session.state, session.lastBook) { list, s, last ->
             val position = if (last?.asin == book.asin) s.positionMs else previewPositionMs
@@ -34,7 +43,11 @@ class ChaptersViewModel(
 
     init {
         if (chapters.value.isEmpty()) {
-            viewModelScope.launch { chapters.value = chapterCache.get(book.asin) }
+            viewModelScope.launch {
+                val list = chapterCache.get(book.asin)
+                chapters.value = list
+                _status.value = if (list.isEmpty()) NO_CHAPTERS else null
+            }
         }
     }
 

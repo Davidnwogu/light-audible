@@ -20,6 +20,7 @@ class FakeControls(initial: SessionState) : PlaybackControls {
 
     override fun open(book: LibraryBook, factory: PlaybackFactory, startAtMs: Long?) {
         calls += "open ${book.asin}"
+        lastBook.value = book
         factories += factory
         openStarts += startAtMs
     }

@@ -102,8 +102,9 @@ class PlayerViewModelTest {
         book: LibraryBook = bookA,
         d: Downloads = downloads(),
         speed: SpeedSetting = SpeedSetting(store, backgroundScope),
+        cache: ChapterCache = ChapterCache(api),
     ): PlayerViewModel =
-        PlayerViewModel(book, s, ChapterCache(api), speed, d, { asin -> resumeCalls += asin; resume(asin) }, factory)
+        PlayerViewModel(book, s, cache, speed, d, { asin -> resumeCalls += asin; resume(asin) }, factory)
             .also { it.onShow(); advanceUntilIdle() }
 
     @Test
@@ -372,5 +373,58 @@ class PlayerViewModelTest {
         s.calls.clear()
         v.seekToFraction(0.5f)
         assertEquals(listOf("seek 500000"), s.calls)
+    }
+
+    @Test
+    fun chapterLineAppearsWhenChaptersArriveLater() = runTest {
+        val cache = ChapterCache(api) // the fetch on show fails
+        val v = vm(session(pos = 3_700_000), cache = cache)
+        assertNull(v.state.value.chapterLine)
+        api.bookResult = { ApiResult.Ok(BookState(BookStatus.Ready, chapters = chapters)) }
+        cache.get("A") // e.g. the Library fetching them
+        advanceUntilIdle()
+        assertEquals("Two", v.state.value.chapterLine)
+    }
+
+    @Test
+    fun playFromPreviewSwitchesToTheLoadedBook() = runTest {
+        resume = { 3_700_000 }
+        val s = session(asin = "B", playing = true, last = bookB)
+        val v = vm(s)
+        assertTrue(v.state.value.isPreview)
+        v.playPause()
+        // The session switches to A: preparing at 0 until the resume point is known.
+        s.state.value = SessionState("A", bookA.title, 0, runtime, false, Phase.Preparing)
+        advanceUntilIdle()
+        var st = v.state.value
+        assertFalse(st.isPreview)
+        assertFalse(st.skipsEnabled)
+        assertEquals("1:01:40", st.position) // the previewed resume point, not 0:00
+        s.state.value = s.state.value.copy(phase = Phase.Connecting)
+        advanceUntilIdle()
+        assertEquals("1:01:40", v.state.value.position)
+        s.state.value = SessionState("A", bookA.title, 3_700_000, runtime, true, Phase.Ready)
+        advanceUntilIdle()
+        st = v.state.value
+        assertFalse(st.isPreview)
+        assertTrue(st.skipsEnabled)
+        assertTrue(st.isPlaying)
+        assertEquals("1:01:40", st.position)
+        s.calls.clear()
+        v.back15()
+        v.forward15()
+        assertEquals(listOf("skip -15000", "skip 15000"), s.calls)
+    }
+
+    @Test
+    fun loadedBookPreparingFromAChapterShowsItsPosition() = runTest {
+        // A real position from the session wins over the preview once it is non-zero.
+        resume = { 3_700_000 }
+        val s = session(asin = "B", last = bookB)
+        val v = vm(s)
+        v.playPause()
+        s.state.value = SessionState("A", bookA.title, 600_000, runtime, false, Phase.Preparing)
+        advanceUntilIdle()
+        assertEquals("10:00", v.state.value.position)
     }
 }

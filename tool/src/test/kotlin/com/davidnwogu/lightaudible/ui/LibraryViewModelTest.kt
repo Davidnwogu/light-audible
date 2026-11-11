@@ -143,11 +143,24 @@ class LibraryViewModelTest {
     }
 
     @Test
-    fun cachedBooksAndFailureHasNoBanner() = runTest {
+    fun cachedBooksAndFailureSaysServerIsUnreachable() = runTest {
         store.saveLibraryCache(LibraryCache(old, "e1", now - 25 * hour))
         val vm = shown()
         assertEquals(old, vm.state.value.visible)
+        assertEquals("Can't reach the server.", vm.state.value.banner)
+    }
+
+    @Test
+    fun offlineRefreshWithCacheSaysServerIsUnreachable() = runTest {
+        store.saveLibraryCache(LibraryCache(old, "e1", now - hour))
+        val vm = shown()
         assertNull(vm.state.value.banner)
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(1, api.refreshLibraryCalls)
+        assertEquals(old, vm.state.value.visible)
+        assertEquals("Can't reach the server.", vm.state.value.banner)
+        assertFalse(vm.state.value.loading)
     }
 
     @Test
@@ -324,5 +337,22 @@ class LibraryViewModelTest {
     fun togglePlayDelegatesToSession() = runTest {
         shown().togglePlay(PlaybackFactory { error("unused") })
         assertEquals(listOf("toggle"), session.calls)
+    }
+
+    @Test
+    fun rowMarkFollowsTheBarAfterRelease() = runTest {
+        val v = withLast(sess(asin = "A", phase = Phase.Idle))
+        assertTrue(v.state.value.rows.single().isLoaded)
+        assertEquals("A · One", v.state.value.nowPlaying?.text) // the bar shows too
+    }
+
+    @Test
+    fun downloadMarkFollowsProgressAndShows() = runTest {
+        val v = withLast(sess())
+        assertFalse(v.state.value.rows.single().isDownloaded)
+        java.io.File(dir, "A.m4b").writeText("x")
+        v.onShow()
+        advanceUntilIdle()
+        assertTrue(v.state.value.rows.single().isDownloaded)
     }
 }

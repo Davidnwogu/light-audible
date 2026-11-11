@@ -18,6 +18,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -70,6 +73,15 @@ class PlayerViewModel(
 
     /** Bumped after a removal so the file check reruns. */
     private val downloadedTick = MutableStateFlow(0)
+
+    /** This book's download progress and file presence; the file is checked only when either changes, not per tick. */
+    private data class Dl(val progress: Float?, val downloaded: Boolean)
+
+    private fun dlNow(progress: Float?) = Dl(progress, progress == null && downloads.isDownloaded(book.asin))
+
+    private val dl = combine(downloads.progress.map { it[book.asin] }.distinctUntilChanged(), downloadedTick) { p, _ ->
+        dlNow(p)
+    }
     private var attached = false
     private var resumeRequested = false
 
@@ -78,14 +90,22 @@ class PlayerViewModel(
     private val local = combine(chapters, resumeMs, downloadFailure, speed.rate) { c, r, f, s -> Local(c, r, f, s) }
 
     val state: StateFlow<PlayerUiState> =
-        combine(session.state, session.lastBook, local, downloads.progress, downloadedTick) { s, last, l, progress, _ ->
-            build(s, last?.asin == book.asin, l, progress[book.asin])
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, build(session.state.value, isLoaded(), currentLocal(), downloads.progress.value[book.asin]))
+        combine(session.state, session.lastBook, local, dl) { s, last, l, d ->
+            build(s, last?.asin == book.asin, l, d)
+        }.stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            build(session.state.value, isLoaded(), currentLocal(), dlNow(downloads.progress.value[book.asin])),
+        )
 
     /** The position the Chapters screen marks while previewing. */
     val previewPositionMs: Long get() = resumeMs.value
 
     init {
+        // Chapters fetched later (here, by the Library or by Chapters) show on the chapter line when they arrive.
+        viewModelScope.launch {
+            chapterCache.updates.map { it[book.asin] }.filterNotNull().distinctUntilChanged().collect { chapters.value = it }
+        }
         viewModelScope.launch {
             downloads.failures.collect { (asin, message) -> if (asin == book.asin) downloadFailure.value = message }
         }
@@ -95,15 +115,22 @@ class PlayerViewModel(
 
     private fun currentLocal() = Local(chapters.value, resumeMs.value, downloadFailure.value, speed.rate.value)
 
-    private fun build(s: SessionState, loaded: Boolean, l: Local, dlProgress: Float?): PlayerUiState {
+    private fun build(s: SessionState, loaded: Boolean, l: Local, d: Dl): PlayerUiState {
         val runtime = book.runtimeMs ?: 0L
         val durationMs = if (loaded && s.durationMs > 0) s.durationMs else runtime
-        val positionMs = if (loaded) s.positionMs else l.resumeMs
+        // Just after ▶ from the preview the session holds 0 until it knows the resume point: keep the previewed one.
+        val starting = s.phase is Phase.Preparing || s.phase is Phase.Connecting
+        val positionMs = if (loaded && !(starting && s.positionMs == 0L)) s.positionMs else l.resumeMs
         val status = if (loaded) statusLine(s.phase) else null
         val busy = status != null
         // Reconnecting: play/pause stays on, shown as pause; a tap stops the recovery (the session pauses it).
         val reconnecting = loaded && s.phase is Phase.Reconnecting
-        val download = downloadControl(dlProgress)
+        val dlProgress = d.progress
+        val download = when {
+            dlProgress != null -> DownloadControl.Downloading
+            d.downloaded -> DownloadControl.Downloaded
+            else -> DownloadControl.NotDownloaded
+        }
         return PlayerUiState(
             title = book.title,
             chapterLine = status ?: l.failure ?: currentChapter(l.chapters, positionMs)?.title,

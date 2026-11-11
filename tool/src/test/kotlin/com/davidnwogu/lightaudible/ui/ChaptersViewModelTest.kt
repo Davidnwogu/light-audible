@@ -22,6 +22,7 @@ import com.davidnwogu.lightaudible.sync.PositionSync
 import com.davidnwogu.lightaudible.sync.Preparer
 import java.time.Instant
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
@@ -137,5 +138,24 @@ class ChaptersViewModelTest {
         runCurrent()
         val sets = f2.last.calls.filterIsInstance<FakePlayback.Call.SetItem>()
         assertEquals(listOf("A" to 3_600_000L), sets.map { it.item.asin to it.startMs }, "${f2.last.calls}")
+    }
+
+    @Test
+    fun loadingThenNoChaptersWhenTheFetchFails() = runTest {
+        api.bookResult = { ApiResult.Failed(null) }
+        val v = vm(session("A", 0, bookA))
+        assertEquals("Loading…", v.status.value)
+        advanceUntilIdle()
+        assertEquals("No chapters", v.status.value)
+        assertEquals(emptyList(), v.rows.value)
+    }
+
+    @Test
+    fun noStatusOnceChaptersLoad() = runTest {
+        val v = vm(session("A", 0, bookA))
+        assertEquals("Loading…", v.status.value)
+        advanceUntilIdle()
+        assertNull(v.status.value)
+        assertEquals(3, v.rows.value.size)
     }
 }

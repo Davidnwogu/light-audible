@@ -47,7 +47,7 @@ pair the tool once, then check each screen against `docs/superpowers/specs/2026-
 - **Connect** (only after signing out): small "Audiobooks" title bar, address and code fields, Connect.
 - **Library**: top bar with search, "Audiobooks" and refresh; rows are title over authors, left-aligned, never drawn over the top bar.
   - Search: the editor opens; the bar then shows the quoted query, ✕ on the left, search on the right; matches filter the list.
-  - Refresh: a "Connecting…" line shows under the top bar, then clears.
+  - Refresh: a "Connecting…" line shows under the top bar, then clears; offline it becomes "Can't reach the server." and the list stays usable.
   - Now-playing bar: absent with nothing loaded; once a book is loaded it shows "title · chapter" on up to two lines (never cut to a few letters) and a play/pause icon that works without leaving the Library; ♪ marks the row.
 - **Player** (tap a book): back, bold title, chapter line, "authors · length", progress bar, ↺15 / ▶ / 15↻ row centred, position, bottom bar with chapters, download and speed.
   - Opened for a book that is not loaded: shows the first or resume chapter and ▶; whatever was playing keeps playing until ▶ is pressed.
@@ -56,8 +56,8 @@ pair the tool once, then check each screen against `docs/superpowers/specs/2026-
   - Download: tap shows "n%", tap again cancels; a finished download shows ⤓ and a tap asks "Remove download?" (Cancel keeps it).
   - Offline or failed: "Reconnecting…" (⏸ still pauses; skips are disabled), "Couldn't play this book" with "Try again".
   - Disabled controls are drawn lighter and do not respond (for example ↺15 and 15↻ before ▶; refresh while the Library is fetching).
-- **Chapters**: back and "Chapters" bar; one-line rows with durations right-aligned in a column; opens scrolled to the current chapter (▸, bold); tapping a row seeks and returns to the Player.
-- **Resume after a long pause** (not covered by the quick pass): pause, leave it over 15 minutes, press play on the Library's bar; it should resume.
+- **Chapters**: back and "Chapters" bar; one-line rows with durations right-aligned in a column; opens scrolled to the current chapter (▸, bold); tapping a row seeks and returns to the Player; "Loading…" shows while chapters are fetched, "No chapters" if none came back.
+- **Resume after release**: with a book playing, pause it in the Player, press Back to the Library and wait a few seconds (the tool lets go of the player about a second after a pause with no Player open). Press play on the Library's bar: it resumes where it paused. Then pause, go Back, wait again, open the Player, open Chapters and tap a chapter: the position moves there without playing, and ▶ plays from that chapter.
 
 ## Test dependency note
 

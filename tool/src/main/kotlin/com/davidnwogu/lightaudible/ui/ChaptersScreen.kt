@@ -60,6 +60,7 @@ class ChaptersScreen(
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val rows by viewModel.rows.collectAsState()
+        val status by viewModel.status.collectAsState()
         SignedOutWatcher(graph.auth) { goBack() }
         LightTheme(colors = themeColors) {
             Column(modifier = Modifier.fillMaxSize().background(LightThemeTokens.colors.background)) {
@@ -67,6 +68,9 @@ class ChaptersScreen(
                     leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
                     center = LightTopBarCenter.Text("Chapters"),
                 )
+                status?.let {
+                    LightText(it, variant = LightTextVariant.Copy, modifier = Modifier.padding(horizontal = 1f.gridUnitsAsDp()))
+                }
                 val listState = rememberLazyListState()
                 // Chapters may arrive after the screen opens: scroll to the current row once, when first known.
                 val currentIndex = rows.indexOfFirst { it.isCurrent }
