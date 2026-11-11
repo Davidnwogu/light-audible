@@ -62,7 +62,7 @@ Same fields and button as today: server address, 6-digit code, Connect. The gian
   - the left button becomes ✕ (clear)
   - the right button becomes the search icon (edit the query)
   - matching is case-insensitive on title or author, as today.
-- **Now-playing bar** (`LightBottomBar`, two items), shown only while a book is loaded in the playback session:
+- **Now-playing bar** (a custom bar matching `LightBottomBar`'s height, padding and touch targets, because the kit's text item is too large to show the title and chapter; text on up to two lines, plus one icon), shown only while a book is loaded in the playback session:
   - left: text "‹title› · ‹current chapter›" (or "‹title› · Preparing…"); tapping it opens the Player
   - right: play or pause icon, which controls playback without leaving the Library; hidden while preparing.
   - With nothing loaded there is no bottom bar.

@@ -2,18 +2,23 @@ package com.davidnwogu.lightaudible.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import com.davidnwogu.lightaudible.Graph
 import com.davidnwogu.lightaudible.playback.LightPlaybackFactory
@@ -35,6 +40,11 @@ import com.thelightphone.sdk.ui.LightTopBarCenter
 import com.thelightphone.sdk.ui.gridUnitsAsDp
 import com.thelightphone.sdk.ui.lightClickable
 import kotlinx.coroutines.flow.map
+
+// Mirrors the private constants in the SDK's LightBottomBar.kt (BOTTOMBAR_HEIGHT_UNITS = 4f, line 19;
+// HORIZONTAL_PADDING_MULTI_UNITS = 2f, line 20, used for bars of two or more items).
+private const val BAR_HEIGHT_UNITS = 4f
+private const val BAR_PADDING_UNITS = 2f
 
 class LibraryScreen(private val sealedActivity: SealedLightActivity) :
     LightScreen<Unit, LibraryViewModel>(sealedActivity) {
@@ -95,9 +105,10 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) :
                         Unit
                     }
                     // The kit's bottom-bar text is one large line that cuts "title · chapter" to a few letters,
-                    // so this bar is drawn by hand: same height and padding, smaller two-line text.
+                    // so this bar is drawn by hand with the kit's own height and padding and smaller two-line text.
                     Row(
-                        modifier = Modifier.fillMaxWidth().height(4f.gridUnitsAsDp()).padding(horizontal = 1f.gridUnitsAsDp()),
+                        modifier = Modifier.fillMaxWidth().height(BAR_HEIGHT_UNITS.gridUnitsAsDp())
+                            .padding(horizontal = BAR_PADDING_UNITS.gridUnitsAsDp()),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(1f.gridUnitsAsDp()),
                     ) {
@@ -106,17 +117,25 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) :
                             variant = LightTextVariant.Detail,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).lightClickable { open() },
+                            modifier = Modifier.weight(1f).fillMaxHeight().wrapContentHeight(Alignment.CenterVertically)
+                                .lightClickable(onClickLabel = "Open player", role = Role.Button) { open() },
                         )
                         if (bar.showPlayPause) {
-                            LightIcon(
-                                icon = if (bar.isPlaying) LightIcons.PAUSE else LightIcons.PLAY,
-                                size = LightBarButtonDefaults.ICON_SIZE_UNITS,
-                                modifier = Modifier.lightClickable {
-                                    viewModel.togglePlay(LightPlaybackFactory(DefaultLightAudio(sealedActivity)))
-                                },
-                                contentDescription = if (bar.isPlaying) "Pause" else "Play",
-                            )
+                            val label = if (bar.isPlaying) "Pause" else "Play"
+                            // Touch target is the whole bar height, wider than the kit's icon-sized target.
+                            Box(
+                                modifier = Modifier.fillMaxHeight().widthIn(min = BAR_HEIGHT_UNITS.gridUnitsAsDp())
+                                    .lightClickable(onClickLabel = label, role = Role.Button) {
+                                        viewModel.togglePlay(LightPlaybackFactory(DefaultLightAudio(sealedActivity)))
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                LightIcon(
+                                    icon = if (bar.isPlaying) LightIcons.PAUSE else LightIcons.PLAY,
+                                    size = LightBarButtonDefaults.ICON_SIZE_UNITS,
+                                    contentDescription = label,
+                                )
+                            }
                         }
                     }
                 }
