@@ -7,11 +7,19 @@ import kotlinx.coroutines.flow.StateFlow
 interface PlaybackControls {
     val state: StateFlow<SessionState>
 
-    /** Plays [book] and marks a screen attached. */
-    fun open(book: LibraryBook, factory: PlaybackFactory)
+    /** The book last passed to [open]; survives release, give-up and failure. Null until a book is opened. */
+    val lastBook: StateFlow<LibraryBook?>
+
+    /**
+     * Plays [book] and marks a screen attached. With [startAtMs] it plays from there instead of the resume
+     * point (or any carried position), seeking when the book is already live.
+     */
+    fun open(book: LibraryBook, factory: PlaybackFactory, startAtMs: Long? = null)
     fun attach()
     fun detach()
-    fun togglePlay()
+
+    /** Pauses or plays; with no handle, reopens [lastBook] through [factory] at its saved position. No-op if none. */
+    fun togglePlay(factory: PlaybackFactory)
     fun skip(deltaMs: Long)
     fun seekTo(ms: Long)
 

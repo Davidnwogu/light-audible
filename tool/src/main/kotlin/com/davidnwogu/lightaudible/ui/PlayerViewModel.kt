@@ -88,7 +88,7 @@ class PlayerViewModel(
         super.onCleared()
     }
 
-    fun togglePlay() = session.togglePlay()
+    fun togglePlay() = session.togglePlay(factory)
     fun back30() = session.skip(-30_000)
     fun forward30() = session.skip(30_000)
     fun jumpTo(chapter: Chapter) = session.seekTo(chapter.startMs)

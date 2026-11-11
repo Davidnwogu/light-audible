@@ -33,6 +33,8 @@ class PlaybackSession(
 ) : PlaybackControls {
     private val _state = MutableStateFlow(SessionState(null, null, 0, 0, false, Phase.Idle))
     override val state: StateFlow<SessionState> = _state.asStateFlow()
+    private val _lastBook = MutableStateFlow<LibraryBook?>(null)
+    override val lastBook: StateFlow<LibraryBook?> = _lastBook.asStateFlow()
 
     private var handle: Playback? = null
     private var factory: PlaybackFactory? = null
@@ -72,11 +74,16 @@ class PlaybackSession(
     /**
      * The Book screen's Play: always plays [book], reusing the live detached item when it is the same
      * book, and marks a screen attached. A Player screen shown again must call [attach], not this.
+     * [startAtMs] (a chosen chapter) wins over the resume point and any carried position; a live item
+     * of the same book is sought there rather than reloaded.
      */
-    override fun open(book: LibraryBook, factory: PlaybackFactory) {
-        attached = true
+    override fun open(book: LibraryBook, factory: PlaybackFactory, startAtMs: Long?) =
+        openBook(book, factory, startAtMs, attach = true)
+
+    private fun openBook(book: LibraryBook, factory: PlaybackFactory, startAtMs: Long?, attach: Boolean) {
+        if (attach) attached = true
         val newFactory = factory !== this.factory
-        if (!newFactory && this.book?.asin == book.asin && openJob?.isActive == true) return
+        if (startAtMs == null && !newFactory && this.book?.asin == book.asin && openJob?.isActive == true) return
         // A handle opened through another (possibly finished) screen's factory is never reused: release it
         // (detached playback keeps going; the real position is recorded if an item is loaded) and open a
         // fresh one, whose live queue the reuse path below then keeps -- unless the released handle never
@@ -87,13 +94,14 @@ class PlaybackSession(
         val switching = this.book?.asin != book.asin
         this.book = book
         this.factory = factory
+        _lastBook.value = book
         errorAcked = false
         stopRecovery()
         _state.update {
             if (!switching) it.copy(phase = Phase.Preparing)
-            else SessionState(book.asin, book.title, 0, book.runtimeMs ?: 0, it.isPlaying, Phase.Preparing)
+            else SessionState(book.asin, book.title, startAtMs ?: 0, book.runtimeMs ?: 0, it.isPlaying, Phase.Preparing)
         }
-        load(book, reuseLive = true, carryStartMs = carryStartMs)
+        load(book, reuseLive = true, carryStartMs = carryStartMs, startAtMs = startAtMs)
     }
 
     override fun attach() { attached = true }
@@ -107,8 +115,12 @@ class PlaybackSession(
         if (!p.isPlaying.value && !maybeRelease()) scheduleCheck(if (playPending) PLAY_START_GRACE_MS else GRACE_MS)
     }
 
-    override fun togglePlay() {
-        val p = handle ?: return
+    /**
+     * With no handle (released, given up or failed), reopens [lastBook] through [factory] at its saved position
+     * and plays it, leaving [attached] as it was: a caller that is not a Player screen never has to detach.
+     */
+    override fun togglePlay(factory: PlaybackFactory) {
+        val p = handle ?: return run { _lastBook.value?.let { openBook(it, factory, startAtMs = null, attach = false) } }
         val e = p.error.value
         if (recovering) {
             stopRecovery()
@@ -147,14 +159,14 @@ class PlaybackSession(
         return true
     }
 
-    private fun load(book: LibraryBook, reuseLive: Boolean, carryStartMs: Long? = null) {
+    private fun load(book: LibraryBook, reuseLive: Boolean, carryStartMs: Long? = null, startAtMs: Long? = null) {
         openJob?.cancel()
         val p = handle ?: openHandle() ?: return
         val token = Any()
         loading = token
         openJob = scope.launch {
             val loaded = try {
-                loadInto(p, book, reuseLive, carryStartMs)
+                loadInto(p, book, reuseLive, carryStartMs, startAtMs)
             } finally {
                 if (loading === token) loading = null
             }
@@ -165,22 +177,27 @@ class PlaybackSession(
     /**
      * Returns false when the book could not be loaded (the phase says why). [carryStartMs] is a position carried
      * from a handle released before its item played: it overrides the live item only while that is paused behind it.
+     * [startAtMs] is an explicit start that wins over both: a live item of the same book is sought there, else
+     * the book loads there without asking for the resume point.
      */
-    private suspend fun loadInto(p: Playback, book: LibraryBook, reuseLive: Boolean, carryStartMs: Long?): Boolean {
+    private suspend fun loadInto(
+        p: Playback, book: LibraryBook, reuseLive: Boolean, carryStartMs: Long?, startAtMs: Long?,
+    ): Boolean {
         if (!p.awaitReady()) {
             fail(PLAY_FAILED, releaseNow = true)
             return false
         }
         val asin = book.asin
         val live = p.currentItemId.value
-        val liveBehindCarry = carryStartMs != null && !p.isPlaying.value &&
+        val liveBehindCarry = startAtMs == null && carryStartMs != null && !p.isPlaying.value &&
             p.positionMs.value + CARRY_TOLERANCE_MS < carryStartMs
         if (reuseLive && live == asin && !liveBehindCarry) {
             unstarted = null
             if (p.isPlaying.value) startedSinceLoad = true
             item = asin
             streamed = !downloads.isDownloaded(asin)
-            setPosition(p.positionMs.value)
+            if (startAtMs != null) p.seekTo(startAtMs.coerceAtLeast(0))
+            setPosition(startAtMs?.coerceAtLeast(0) ?: p.positionMs.value)
             _state.update { it.copy(phase = Phase.Ready) }
             val e = p.error.value
             if (e != null) onError(e) else requestPlay(p)
@@ -196,7 +213,7 @@ class PlaybackSession(
         item = null
         if (live != null && live != asin) pause(p)
         val source = sourceFor(asin, fresh = false) ?: return false
-        val start = carryStartMs ?: resumeAt ?: positions.resumePoint(asin)
+        val start = startAtMs?.coerceAtLeast(0) ?: carryStartMs ?: resumeAt ?: positions.resumePoint(asin)
         startedSinceLoad = false
         unstarted = null
         p.setItem(playbackItem(book, source), start)

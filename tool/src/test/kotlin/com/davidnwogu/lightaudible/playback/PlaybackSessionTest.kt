@@ -375,7 +375,7 @@ class PlaybackSessionTest {
         suspend fun openPauseDetach() {
             s.open(bookA, factory)
             runCurrent()
-            s.togglePlay()
+            s.togglePlay(factory)
             s.detach()
             runCurrent()
             assertTrue(factory.last.released)
@@ -406,7 +406,7 @@ class PlaybackSessionTest {
         advanceTimeBy(35_000)
         assertEquals(listOf("A" to 30_000L, "A" to 90_000L), records())
         p.positionMs.value = 125_000
-        s.togglePlay()
+        s.togglePlay(factory)
         runCurrent()
         assertEquals(listOf("A" to 30_000L, "A" to 90_000L, "A" to 125_000L), records())
         advanceTimeBy(180_000)
@@ -421,7 +421,7 @@ class PlaybackSessionTest {
         runCurrent()
         val p = factory.last
         p.positionMs.value = 7_000
-        s.togglePlay()
+        s.togglePlay(factory)
         runCurrent()
         assertEquals(listOf("A" to 7_000L), records())
         s.detach()
@@ -593,7 +593,7 @@ class PlaybackSessionTest {
         assertTrue(s.state.value.isPlaying)
         advanceTimeBy(5_000)
         assertFalse(p.released)
-        s.togglePlay()
+        s.togglePlay(factory)
         advanceTimeBy(1_001)
         assertTrue(p.released)
         assertEquals(20_000, p.replaces().last().startMs)
@@ -641,7 +641,7 @@ class PlaybackSessionTest {
         assertEquals(Phase.Reconnecting, s.state.value.phase)
         val replaces = p.replaces().size
         val plays = p.calls.count { it == Call.Play }
-        s.togglePlay() // user pauses while reconnecting
+        s.togglePlay(factory) // user pauses while reconnecting
         runCurrent()
         s.detach()
         advanceTimeBy(120_000)
@@ -663,10 +663,10 @@ class PlaybackSessionTest {
         p.autoPrepare = false
         p.prepareFails(sourceError)
         runCurrent()
-        s.togglePlay()
+        s.togglePlay(factory)
         runCurrent()
         val prepares = api.prepareCalls.size
-        s.togglePlay() // play again
+        s.togglePlay(factory) // play again
         runCurrent()
         assertEquals(prepares + 1, api.prepareCalls.size)
         assertEquals(40_000, p.replaces().last().startMs)
@@ -878,5 +878,127 @@ class PlaybackSessionTest {
         assertEquals(1, f2.openCount)
         assertEquals(1.5f, f1.last.lastSpeed)
         assertEquals(1.5f, f2.last.lastSpeed)
+    }
+
+    /** Remote positions follow what the session recorded, as the server would. */
+    private fun remoteFollowsRecords() {
+        api.positionResult = { asin ->
+            ApiResult.Ok(RemotePosition(records().lastOrNull { it.first == asin }?.second ?: 0L, "2029-12-31T00:00:00Z"))
+        }
+    }
+
+    /** Opens A, plays to [atMs], pauses and detaches so the session releases its handle. */
+    private fun TestScope.playPauseRelease(s: PlaybackSession, atMs: Long): FakePlayback {
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = atMs
+        runCurrent()
+        s.togglePlay(factory)
+        runCurrent()
+        s.detach()
+        runCurrent()
+        assertTrue(p.released)
+        return p
+    }
+
+    @Test
+    fun lastBookSurvivesRelease() = runTest {
+        val s = session()
+        assertEquals(null, s.lastBook.value)
+        playPauseRelease(s, 7_000)
+        assertEquals(bookA, s.lastBook.value)
+        s.open(bookB, factory)
+        runCurrent()
+        assertEquals(bookB, s.lastBook.value)
+    }
+
+    @Test
+    fun togglePlayAfterReleaseReopensLastBook() = runTest {
+        remoteFollowsRecords()
+        val s = session()
+        playPauseRelease(s, 7_000)
+        val f2 = FakePlaybackFactory()
+        s.togglePlay(f2)
+        runCurrent()
+        assertEquals(1, f2.openCount)
+        val sets = f2.last.calls.filterIsInstance<Call.SetItem>()
+        assertEquals(listOf("A" to 7_000L), sets.map { it.item.asin to it.startMs }, "${f2.last.calls}")
+        assertEquals(Call.Play, f2.last.calls.last())
+        assertTrue(s.state.value.isPlaying)
+        assertEquals("A", s.state.value.asin)
+        assertEquals(7_000, s.state.value.positionMs)
+        assertEquals(Phase.Ready, s.state.value.phase)
+    }
+
+    @Test
+    fun togglePlayWithNothingOpenedIsNoOp() = runTest {
+        val s = session()
+        s.togglePlay(factory)
+        runCurrent()
+        assertEquals(0, factory.openCount)
+        assertTrue(api.prepareCalls.isEmpty())
+        assertTrue(api.positionCalls.isEmpty())
+        assertEquals(SessionState(null, null, 0, 0, false, Phase.Idle), s.state.value)
+    }
+
+    @Test
+    fun reopenedHandleGetsSavedSpeed() = runTest {
+        speed.value = 1.5f
+        val s = session()
+        playPauseRelease(s, 7_000)
+        val f2 = FakePlaybackFactory()
+        s.togglePlay(f2)
+        runCurrent()
+        assertEquals(1.5f, f2.last.lastSpeed)
+    }
+
+    @Test
+    fun openAtStartPositionSkipsResumePoint() = runTest {
+        resume["A"] = 42_000
+        val s = session()
+        s.open(bookA, factory, startAtMs = 600_000)
+        runCurrent()
+        assertEquals(
+            listOf(Call.AwaitReady, Call.SetItem(item(bookA, PlaybackSource.Url(url("A", 1))), 600_000), Call.Play),
+            factory.last.calls,
+        )
+        assertTrue(api.positionCalls.isEmpty(), "${api.positionCalls}")
+        assertEquals(600_000, s.state.value.positionMs)
+        assertTrue(s.state.value.isPlaying)
+    }
+
+    @Test
+    fun openAtStartPositionOnLiveBookSeeks() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        val p = factory.last
+        p.positionMs.value = 40_000
+        runCurrent()
+        s.togglePlay(factory) // paused, so play must be asked for again
+        runCurrent()
+        val before = p.calls.size
+        s.open(bookA, factory, 600_000)
+        runCurrent()
+        val after = p.calls.drop(before)
+        assertTrue(after.none { it is Call.SetItem || it is Call.ReplaceItem }, "$after")
+        assertTrue(Call.SeekTo(600_000) in after, "$after")
+        assertEquals(Call.Play, after.last())
+        assertEquals(1, factory.openCount)
+        assertEquals(600_000, s.state.value.positionMs)
+        assertTrue(s.state.value.isPlaying)
+    }
+
+    @Test
+    fun openAtStartPositionOverridesACarriedPosition() = runTest {
+        val s = releasedWhileSeekPending() // carries A at 3_600_000
+        val f2 = FakePlaybackFactory { liveA(0, playing = false) }
+        s.open(bookA, f2, startAtMs = 600_000)
+        runCurrent()
+        val calls = f2.last.calls
+        assertTrue(calls.none { it is Call.SetItem && it.startMs == 3_600_000L }, "$calls")
+        assertTrue(Call.SeekTo(600_000) in calls, "$calls")
+        assertEquals(600_000, s.state.value.positionMs)
     }
 }
