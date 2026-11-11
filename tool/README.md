@@ -39,6 +39,26 @@ in `lighttool.toml` and drop the flag.
 
 See the SDK's `docs/system_app` section 9 for emulator setup.
 
+## End-to-end checklist (emulator)
+
+Start the emulator with `-dns-server 8.8.8.8,1.1.1.1` (without it the Library and streaming fail),
+pair the tool once, then check each screen against `docs/superpowers/specs/2026-11-09-tool-layout-redesign-design.md` §2:
+
+- **Connect** (only after signing out): small "Audiobooks" title bar, address and code fields, Connect.
+- **Library**: top bar with search, "Audiobooks" and refresh; rows are title over authors, left-aligned, never drawn over the top bar.
+  - Search: the editor opens; the bar then shows the quoted query, ✕ on the left, search on the right; matches filter the list.
+  - Refresh: a "Connecting…" line shows under the top bar, then clears.
+  - Now-playing bar: absent with nothing loaded; once a book is loaded it shows "title · chapter" on up to two lines (never cut to a few letters) and a play/pause icon that works without leaving the Library; ♪ marks the row.
+- **Player** (tap a book): back, bold title, chapter line, "authors · length", progress bar, ↺15 / ▶ / 15↻ row centred, position, bottom bar with chapters, download and speed.
+  - Opened for a book that is not loaded: shows the first or resume chapter and ▶; whatever was playing keeps playing until ▶ is pressed.
+  - ▶ on a never-played book: "Preparing…" (can take minutes for a long book), then the chapter line and ⏸.
+  - Speed: tap cycles 1x, 1.25x, 1.5x, 2x; the rate applies at once and survives leaving and reopening the Player.
+  - Download: tap shows "n%", tap again cancels; a finished download shows ⤓ and a tap asks "Remove download?" (Cancel keeps it).
+  - Offline or failed: "Reconnecting…", "Couldn't play this book" with "Try again".
+  - Disabled controls do not respond, but the SDK draws icon buttons at full brightness (it lightens only text), so do not expect them to look lighter.
+- **Chapters**: back and "Chapters" bar; one-line rows with durations right-aligned in a column; opens scrolled to the current chapter (▸, bold); tapping a row seeks and returns to the Player.
+- **Resume after a long pause** (not covered by the quick pass): pause, leave it over 15 minutes, press play on the Library's bar; it should resume.
+
 ## Test dependency note
 
 The SDK plugin allow-list applies to test configurations too, so `okhttp3:mockwebserver` is not
