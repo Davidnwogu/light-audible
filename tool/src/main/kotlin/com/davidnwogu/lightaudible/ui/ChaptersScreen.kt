@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -107,7 +108,13 @@ class ChaptersScreen(
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f),
                                 )
-                                LightText(row.length, variant = LightTextVariant.Detail, align = TextAlign.End, maxLines = 1)
+                                LightText(
+                                    row.length,
+                                    variant = LightTextVariant.Detail,
+                                    align = TextAlign.End,
+                                    maxLines = 1,
+                                    modifier = Modifier.widthIn(min = 3f.gridUnitsAsDp()),
+                                )
                             }
                         }
                     }
