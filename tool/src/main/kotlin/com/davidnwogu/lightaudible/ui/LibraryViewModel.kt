@@ -185,7 +185,9 @@ class LibraryViewModel(
         return NowPlayingBar(
             text = if (status == null) book.title else "${book.title} · $status",
             showPlayPause = phase is Phase.Idle || phase is Phase.Ready || phase is Phase.Reconnecting,
-            isPlaying = s?.isPlaying == true,
+            // While reconnecting the button pauses (stops the recovery), so it reads as pause,
+            // matching the Player screen.
+            isPlaying = s?.isPlaying == true || phase is Phase.Reconnecting,
         )
     }
 

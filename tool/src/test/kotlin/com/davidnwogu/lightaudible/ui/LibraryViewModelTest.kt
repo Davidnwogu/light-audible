@@ -288,9 +288,11 @@ class LibraryViewModelTest {
     }
 
     @Test
-    fun nowPlayingReconnectingKeepsButton() = runTest {
+    fun nowPlayingReconnectingShowsPauseLikeThePlayer() = runTest {
+        // While recovering the player isn't playing, but the button pauses (stops the recovery),
+        // so it must read as pause — matching the Player screen.
         val v = withLast(sess(phase = Phase.Reconnecting))
-        assertEquals(NowPlayingBar("A · Reconnecting…", true, false), v.state.value.nowPlaying)
+        assertEquals(NowPlayingBar("A · Reconnecting…", true, true), v.state.value.nowPlaying)
     }
 
     @Test
