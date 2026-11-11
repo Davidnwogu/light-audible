@@ -9,6 +9,7 @@ import com.davidnwogu.lightaudible.api.ServerClock
 import com.davidnwogu.lightaudible.playback.PlaybackSession
 import com.davidnwogu.lightaudible.store.DataStoreToolStore
 import com.davidnwogu.lightaudible.store.ToolStore
+import com.davidnwogu.lightaudible.sync.ChapterCache
 import com.davidnwogu.lightaudible.sync.Downloads
 import com.davidnwogu.lightaudible.sync.Preparer
 import com.davidnwogu.lightaudible.sync.PositionSync
@@ -37,6 +38,7 @@ class AppGraph(dataStore: DataStore<Preferences>, val filesDir: File) {
     val api: ServerApi = OkHttpServerApi(OkHttpClient(), store::credentials, clock, auth)
     val positions = PositionSync(api, store, clock)
     val preparer = Preparer(api)
+    val chapters = ChapterCache(api)
 
     init {
         scope.launch { positions.flush() } // reports queued while offline in an earlier run
