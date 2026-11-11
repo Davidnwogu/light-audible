@@ -114,21 +114,14 @@ class PlayerScreen(private val sealedActivity: SealedLightActivity, private val 
                     )
                     LightBottomBar(
                         listOf(
-                            LightBarButton.LightIcon(
-                                LightIcons.SKIP_BACKWARD_FIFTEEN,
-                                onClick = viewModel::back15,
-                                enabled = state.skipsEnabled,
-                            ),
-                            LightBarButton.LightIcon(
+                            // Tinted so disabled controls are drawn lighter (the kit lightens only text items).
+                            tintedBarIcon(LightIcons.SKIP_BACKWARD_FIFTEEN, state.skipsEnabled, viewModel::back15),
+                            tintedBarIcon(
                                 if (state.isPlaying) LightIcons.PAUSE else LightIcons.PLAY,
-                                onClick = viewModel::playPause,
-                                enabled = state.controlsEnabled,
+                                state.controlsEnabled,
+                                viewModel::playPause,
                             ),
-                            LightBarButton.LightIcon(
-                                LightIcons.SKIP_FORWARD_FIFTEEN,
-                                onClick = viewModel::forward15,
-                                enabled = state.skipsEnabled,
-                            ),
+                            tintedBarIcon(LightIcons.SKIP_FORWARD_FIFTEEN, state.skipsEnabled, viewModel::forward15),
                         ),
                     )
                     LightText(state.position, variant = LightTextVariant.Detail, align = TextAlign.Center, modifier = centred)

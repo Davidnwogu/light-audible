@@ -55,7 +55,7 @@ pair the tool once, then check each screen against `docs/superpowers/specs/2026-
   - Speed: tap cycles 1x, 1.25x, 1.5x, 2x; the rate applies at once and survives leaving and reopening the Player.
   - Download: tap shows "n%", tap again cancels; a finished download shows ⤓ and a tap asks "Remove download?" (Cancel keeps it).
   - Offline or failed: "Reconnecting…", "Couldn't play this book" with "Try again".
-  - Disabled controls do not respond, but the SDK draws icon buttons at full brightness (it lightens only text), so do not expect them to look lighter.
+  - Disabled controls are drawn lighter and do not respond (for example ↺15 and 15↻ before ▶; refresh while the Library is fetching).
 - **Chapters**: back and "Chapters" bar; one-line rows with durations right-aligned in a column; opens scrolled to the current chapter (▸, bold); tapping a row seeks and returns to the Player.
 - **Resume after a long pause** (not covered by the quick pass): pause, leave it over 15 minutes, press play on the Library's bar; it should resume.
 

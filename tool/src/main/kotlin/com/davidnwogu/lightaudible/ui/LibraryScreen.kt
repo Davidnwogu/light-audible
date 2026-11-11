@@ -87,11 +87,7 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) :
                     rightButton = if (searching) {
                         LightBarButton.LightIcon(LightIcons.SEARCH, onClick = editSearch)
                     } else {
-                        LightBarButton.LightIcon(
-                            LightIcons.REFRESH,
-                            onClick = { viewModel.refresh() },
-                            enabled = !state.loading,
-                        )
+                        tintedBarIcon(LightIcons.REFRESH, enabled = !state.loading, onClick = { viewModel.refresh() })
                     },
                 )
                 val pad = Modifier.fillMaxWidth().padding(horizontal = 1f.gridUnitsAsDp())
