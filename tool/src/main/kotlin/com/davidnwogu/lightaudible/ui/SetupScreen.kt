@@ -22,6 +22,8 @@ import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.LightTheme
 import com.thelightphone.sdk.ui.LightThemeController
 import com.thelightphone.sdk.ui.LightThemeTokens
+import com.thelightphone.sdk.ui.LightTopBar
+import com.thelightphone.sdk.ui.LightTopBarCenter
 import com.thelightphone.sdk.ui.gridUnitsAsDp
 
 @InitialScreen
@@ -66,7 +68,7 @@ class SetupScreen(activity: SealedLightActivity) : LightScreen<Unit, SetupViewMo
     @Composable
     private fun FormContent(form: SetupUiState.Form) {
         val pad = Modifier.fillMaxWidth().padding(horizontal = 1f.gridUnitsAsDp())
-        LightText("Connect", variant = LightTextVariant.Title, modifier = pad)
+        LightTopBar(center = LightTopBarCenter.Text("Audiobooks"))
         LightTextField(
             label = "Server:",
             value = form.serverUrl,
