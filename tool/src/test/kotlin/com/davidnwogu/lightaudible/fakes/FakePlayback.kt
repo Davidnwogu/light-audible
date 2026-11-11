@@ -98,6 +98,15 @@ class FakePlayback : Playback {
         positionMs.value = ms
     }
 
+    /** The last rate passed to [setSpeed], 1f until then. Not in [calls], so call-list assertions are unaffected. */
+    var lastSpeed = 1f
+    val speeds = mutableListOf<Float>()
+
+    override fun setSpeed(rate: Float) {
+        lastSpeed = rate
+        speeds += rate
+    }
+
     override fun release() {
         calls += Call.Release
     }

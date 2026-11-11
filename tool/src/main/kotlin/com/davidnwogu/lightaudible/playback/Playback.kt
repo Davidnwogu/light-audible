@@ -42,6 +42,9 @@ interface Playback {
     fun pause()
     fun seekTo(ms: Long)
 
+    /** Sets the playback rate (1f is normal); persists across loads on this handle. */
+    fun setSpeed(rate: Float)
+
     /** Releases this handle; detached playback keeps going. */
     fun release()
 }

@@ -7,6 +7,7 @@ import com.davidnwogu.lightaudible.api.OkHttpServerApi
 import com.davidnwogu.lightaudible.api.ServerApi
 import com.davidnwogu.lightaudible.api.ServerClock
 import com.davidnwogu.lightaudible.playback.PlaybackSession
+import com.davidnwogu.lightaudible.playback.SpeedSetting
 import com.davidnwogu.lightaudible.store.DataStoreToolStore
 import com.davidnwogu.lightaudible.store.ToolStore
 import com.davidnwogu.lightaudible.sync.ChapterCache
@@ -50,7 +51,8 @@ class AppGraph(dataStore: DataStore<Preferences>, val filesDir: File) {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
     val downloads = Downloads(filesDir, downloadHttp, preparer, scope)
-    val playback = PlaybackSession(positions, preparer, downloads, scope) { clock.now().toEpochMilli() }
+    val speed = SpeedSetting(store, scope)
+    val playback = PlaybackSession(positions, preparer, downloads, speed.rate, scope) { clock.now().toEpochMilli() }
 }
 
 object Graph {

@@ -75,4 +75,12 @@ class DataStoreToolStoreTest {
         s.saveClockOffsetMs(-1234L)
         assertEquals(-1234L, s.clockOffsetMs())
     }
+
+    @Test
+    fun playbackSpeedDefaultsToOneAndRoundTrips() = runTest {
+        val s = newStore()
+        assertEquals(1f, s.playbackSpeed())
+        s.savePlaybackSpeed(1.25f)
+        assertEquals(1.25f, s.playbackSpeed())
+    }
 }

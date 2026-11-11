@@ -150,6 +150,10 @@ class LightPlayback(private val player: LightAudioPlayer) : Playback {
         if (pendingStart != null) startAt(ms) {} else player.seekTo(ms)
     }
 
+    override fun setSpeed(rate: Float) {
+        player.speed = rate
+    }
+
     override fun release() {
         scope.cancel()
         player.release()

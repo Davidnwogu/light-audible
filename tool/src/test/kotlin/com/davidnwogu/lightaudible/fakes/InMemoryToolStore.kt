@@ -48,6 +48,14 @@ class InMemoryToolStore : ToolStore {
 
     override suspend fun clockOffsetMs(): Long = offsetMs
 
+    private var speed = 1f
+
+    override suspend fun playbackSpeed(): Float = speed
+
+    override suspend fun savePlaybackSpeed(rate: Float) {
+        speed = rate
+    }
+
     override suspend fun saveClockOffsetMs(v: Long) {
         offsetMs = v
     }

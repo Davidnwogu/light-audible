@@ -23,6 +23,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -52,10 +53,12 @@ class PlaybackSessionTest {
     private fun item(book: LibraryBook, source: PlaybackSource) =
         PlaybackItem(book.asin, book.title, book.authors.first(), source)
 
+    private val speed = MutableStateFlow(1f)
+
     private fun TestScope.session(): PlaybackSession {
         val preparer = Preparer(api, 5_000)
         val downloads = Downloads(dir, OkHttpClient(), preparer, backgroundScope)
-        return PlaybackSession(PositionSync(api, store, clock), preparer, downloads, backgroundScope) {
+        return PlaybackSession(PositionSync(api, store, clock), preparer, downloads, speed, backgroundScope) {
             t0 + testScheduler.currentTime
         }
     }
@@ -839,5 +842,41 @@ class PlaybackSessionTest {
         assertEquals(60_000, skipTarget(55_000, 60_000, 30_000))
         assertEquals(35_000, skipTarget(5_000, 0, 30_000))
         assertEquals(0, skipTarget(5_000, 0, -30_000))
+    }
+
+    @Test
+    fun speedAppliedOnOpen() = runTest {
+        speed.value = 1.5f
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(1.5f, factory.last.lastSpeed)
+    }
+
+    @Test
+    fun speedChangeAppliesToLiveHandle() = runTest {
+        val s = session()
+        s.open(bookA, factory)
+        runCurrent()
+        assertEquals(1f, factory.last.lastSpeed)
+        speed.value = 2f
+        runCurrent()
+        assertEquals(2f, factory.last.lastSpeed)
+    }
+
+    @Test
+    fun speedReappliedToEveryNewHandle() = runTest {
+        speed.value = 1.5f
+        val s = session()
+        val f1 = FakePlaybackFactory()
+        val f2 = FakePlaybackFactory()
+        s.open(bookA, f1)
+        runCurrent()
+        s.open(bookA, f2)
+        runCurrent()
+        assertEquals(1, f1.openCount)
+        assertEquals(1, f2.openCount)
+        assertEquals(1.5f, f1.last.lastSpeed)
+        assertEquals(1.5f, f2.last.lastSpeed)
     }
 }

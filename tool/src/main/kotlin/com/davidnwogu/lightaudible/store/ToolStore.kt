@@ -29,4 +29,8 @@ interface ToolStore {
     suspend fun removePendingPosition(p: PendingPosition)
     suspend fun clockOffsetMs(): Long
     suspend fun saveClockOffsetMs(v: Long)
+
+    /** Playback rate; 1f until saved. */
+    suspend fun playbackSpeed(): Float
+    suspend fun savePlaybackSpeed(rate: Float)
 }

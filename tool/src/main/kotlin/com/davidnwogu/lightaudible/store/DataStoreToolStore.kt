@@ -3,6 +3,7 @@ package com.davidnwogu.lightaudible.store
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.davidnwogu.lightaudible.api.ApiJson
@@ -19,6 +20,7 @@ class DataStoreToolStore(private val dataStore: DataStore<Preferences>) : ToolSt
     private val libraryFetchedAtKey = longPreferencesKey("library_fetched_at")
     private val pendingKey = stringPreferencesKey("pending_positions")
     private val clockOffsetKey = longPreferencesKey("clock_offset_ms")
+    private val playbackSpeedKey = floatPreferencesKey("playback_speed")
 
     private val booksSerializer = ListSerializer(LibraryBook.serializer())
     private val pendingSerializer = ListSerializer(PendingPosition.serializer())
@@ -90,5 +92,11 @@ class DataStoreToolStore(private val dataStore: DataStore<Preferences>) : ToolSt
 
     override suspend fun saveClockOffsetMs(v: Long) {
         dataStore.edit { it[clockOffsetKey] = v }
+    }
+
+    override suspend fun playbackSpeed(): Float = prefs()[playbackSpeedKey] ?: 1f
+
+    override suspend fun savePlaybackSpeed(rate: Float) {
+        dataStore.edit { it[playbackSpeedKey] = rate }
     }
 }

@@ -12,6 +12,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -26,6 +27,7 @@ class PlaybackSession(
     private val positions: PositionSync,
     private val preparer: Preparer,
     private val downloads: Downloads,
+    private val speed: StateFlow<Float>,
     private val scope: CoroutineScope,
     private val nowMs: () -> Long,
 ) : PlaybackControls {
@@ -210,7 +212,9 @@ class PlaybackSession(
         val p = runCatching { factory?.open() }.getOrNull()
             ?: return null.also { fail(PLAY_FAILED, releaseNow = false) }
         handle = p
+        p.setSpeed(speed.value) // every handle this session opens starts at the saved rate
         watchJob = scope.launch {
+            launch { speed.drop(1).collect { p.setSpeed(it) } }
             launch { p.positionMs.collect { if (item != null && !recovering && p.error.value == null) setPosition(it) } }
             launch { p.durationMs.collect { d -> if (d > 0) _state.update { it.copy(durationMs = d) } } }
             launch { p.isPlaying.collect(::onPlaying) }
