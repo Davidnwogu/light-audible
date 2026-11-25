@@ -6,6 +6,6 @@ versionName = "0.1.0"
 permissions = ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]
 capabilities = ["detached-audio"]
 orientation = "portrait"
-# Development uses the emulator (build with -DlightSdk.allowAltServerPackage=true).
-# Switch to "com.lightos" for a real Light Phone.
-serverPackage = "com.thelightphone.sdk.emulator"
+# Targets a real Light Phone. For the emulator, switch to "com.thelightphone.sdk.emulator" and
+# build with -DlightSdk.allowAltServerPackage=true.
+serverPackage = "com.lightos"

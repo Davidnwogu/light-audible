@@ -1,11 +1,11 @@
 # Light Audible tool
 
-Kotlin/Compose tool for the Light Phone III, built against Light SDK **v0.2.3**.
+Kotlin/Compose tool for the Light Phone III, built against Light SDK **v0.2.7**.
 
 ## How the build is wired
 
-The tool is built inside a git worktree of the SDK pinned to `v0.2.3`
-(`/Users/davidnwogu/workspace/light-sdk-v0.2.3`). `tool/scripts/sdk-worktree.sh` creates it
+The tool is built inside a git worktree of the SDK pinned to `v0.2.7`
+(`/Users/davidnwogu/workspace/light-sdk-v0.2.7`). `tool/scripts/sdk-worktree.sh` creates it
 (idempotent) and appends this line to the worktree's `settings.gradle.kts`:
 
     project(":tool").projectDir = file("<this repo>/tool")
@@ -25,19 +25,58 @@ The owner's SDK checkout is never modified; only `git fetch --tags` and `git wor
 Always go through `tool/gradlew-sdk` (it passes `-DlightSdk.toolOnly=true`, uses JDK 17 and
 `~/Library/Android/sdk`; override with `LIGHT_JAVA_HOME` / `ANDROID_HOME`).
 
-    tool/gradlew-sdk :tool:testDebugUnitTest -DlightSdk.allowAltServerPackage=true
-    tool/gradlew-sdk :tool:assembleDebug -DlightSdk.allowAltServerPackage=true
+    tool/gradlew-sdk :tool:testDebugUnitTest
+    tool/gradlew-sdk :tool:assembleDebug
 
-The APK lands in `tool/build/outputs/apk/debug/`. While `serverPackage` is the emulator package,
-every invocation (tests included) needs `-DlightSdk.allowAltServerPackage=true`, because the SDK
-plugin validates it at configuration time. For a real phone, set `serverPackage = "com.lightos"`
-in `lighttool.toml` and drop the flag.
+The APK lands in `tool/build/outputs/apk/debug/`. `lighttool.toml` targets a real phone
+(`serverPackage = "com.lightos"`).
 
 ## Install on the emulator
 
+The emulator runs a different server package. Set
+`serverPackage = "com.thelightphone.sdk.emulator"` in `lighttool.toml`, then add
+`-DlightSdk.allowAltServerPackage=true` to every command (tests included), because the SDK plugin
+validates the package at configuration time:
+
     tool/gradlew-sdk :tool:installDebug -DlightSdk.allowAltServerPackage=true
 
-See the SDK's `docs/system_app` section 9 for emulator setup.
+Switch it back before building for the phone. See the SDK's `docs/system_app` section 9 for
+emulator setup.
+
+## Install on a Light Phone (sideload)
+
+Follows the SDK's `docs/sideloading` ("Installing from your dev environment"). The `uploadTool`
+task in `tool/build.gradle.kts` is copied from the SDK's own tool template at v0.2.3 (unchanged through v0.2.7).
+
+One-time setup:
+
+1. Check that `lighttool.toml` has `serverPackage = "com.lightos"` (the default).
+2. Turn on developer mode at dashboard.thelightphone.com (Settings → Account → Developer Account).
+3. Put the phone on the same Wi-Fi as the computer, start the Tool Manager on the phone, open its
+   URL (including the code at the end) in a browser, and choose **Developer**.
+4. Under **Developer Keys**, upload `<SDK worktree>/docs/sideloading/light_debug_signing_key.txt`
+   (the fingerprint of the SDK dev key that signs this build).
+5. Save the browser's Tool Manager key for the command line. In the Tool Manager tab, open DevTools
+   (Cmd+Option+J) and run `copy(sessionStorage.getItem("apiKey"))`, then:
+
+       tool/scripts/save-device-key.sh
+
+   and paste when asked (input is hidden). It saves the key to
+   `~/.config/light-audible/device-token.txt` (mode 600). The key changes whenever the Tool Manager
+   restarts; save it again when uploads fail with HTTP 401. (The SDK docs instead suggest uploading
+   an `openssl rand -hex 32` file under **Authentication**; on a production LP3 in November 2026
+   that key was rejected with 401.)
+
+Then, for each build (keep the Tool Manager open and the screen on; it stops listening otherwise):
+
+    tool/gradlew-sdk :tool:uploadTool -Pdevice.ip=<phone IP> -Pdevice.token="$(cat ~/.config/light-audible/device-token.txt)"
+
+It builds the debug APK, uploads it and waits until the phone reports the tool installed. Optional:
+`-Pdevice.port=` (default 54449), `-Pdevice.timeoutSeconds=` (default 60). Raise `versionCode` if a
+newer build is already on the phone; it refuses a lower one.
+
+For the emulator (with the emulator package and flag set as above), run
+`adb forward tcp:54449 tcp:54449` first and leave out `device.ip`.
 
 ## End-to-end checklist (emulator)
 

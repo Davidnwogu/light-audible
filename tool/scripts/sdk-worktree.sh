@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Creates (idempotently) a git worktree of light-sdk pinned to v0.2.3 and wires this repo's tool/ into it.
+# Creates (idempotently) a git worktree of light-sdk pinned to v0.2.7 and wires this repo's tool/ into it.
 set -euo pipefail
 
 LIGHT_SDK_DIR="${LIGHT_SDK_DIR:-/Users/davidnwogu/workspace/light-sdk}"
-WORKTREE="${WORKTREE:-/Users/davidnwogu/workspace/light-sdk-v0.2.3}"
-TAG="v0.2.3"
+WORKTREE="${WORKTREE:-/Users/davidnwogu/workspace/light-sdk-v0.2.7}"
+TAG="v0.2.7"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 if [ ! -d "$WORKTREE" ]; then
