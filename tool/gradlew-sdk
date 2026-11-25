@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$DIR/scripts/sdk-worktree.sh"
+WORKTREE="${WORKTREE:-/Users/davidnwogu/workspace/light-sdk-v0.2.7}"
+# The Android Gradle jlink transform fails on JDK 26; build with JDK 17.
+export JAVA_HOME="${LIGHT_JAVA_HOME:-$(/usr/libexec/java_home -v 17)}"
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+exec "$WORKTREE/gradlew" -p "$WORKTREE" -DlightSdk.toolOnly=true "$@"
